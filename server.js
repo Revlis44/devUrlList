@@ -43,7 +43,7 @@ export function createApp(options = {}) {
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? join(root, 'data'));
   const backupDir = resolve(options.backupDir ?? process.env.BACKUP_DIR ?? join(root, 'backups'));
   const secureCookie = options.secureCookie ?? process.env.COOKIE_SECURE === 'true';
-  const appOrigin = options.appOrigin ?? process.env.APP_ORIGIN;
+  const appOrigin = (options.appOrigin ?? process.env.APP_ORIGIN) || undefined;
   if (appOrigin && new URL(appOrigin).origin !== appOrigin) throw new Error('APP_ORIGIN은 경로 없이 입력하세요. 예: https://servers.example.com');
   const store = createStore({ dataDir, backupDir, seed: options.seed ?? JSON.parse(readFileSync(join(root, 'seed.example.json'), 'utf8')) });
   const assets = new Map([

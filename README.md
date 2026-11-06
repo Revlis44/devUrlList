@@ -77,7 +77,7 @@ cd /data/devurllist/compose
 | `APP_PORT` | `8188` | 서버에서 공개할 HTTP 포트 |
 | `BIND_IP` | `0.0.0.0` | 접속을 받을 서버 IP. 같은 서버의 HTTPS 프록시만 사용하면 `127.0.0.1`로 변경 |
 | `APP_UID`, `APP_GID` | 설치 실행 사용자 기준 | SQLite·로그·백업 파일의 소유자와 컨테이너 실행 사용자 |
-| `APP_ORIGIN` | 빈 값 | HTTPS 프록시를 사용할 때 브라우저의 최종 주소. 예: `https://servers.example.com` |
+| `APP_ORIGIN` | 빈 값 | 빈 값이면 현재 요청 주소를 사용합니다. HTTPS 프록시를 사용할 때는 브라우저의 최종 주소를 지정합니다. 예: `https://servers.example.com` |
 | `COOKIE_SECURE` | `false` | HTTPS 프록시를 사용할 때 `true`로 변경 |
 
 `sudo`로 설치하면 원래 사용자의 UID/GID를 사용합니다. root 계정에서 직접 설치하면 1000:1000으로 지정합니다. 다른 소유자가 필요하면 설치할 때 `sudo APP_UID=1000 APP_GID=1000 bash scripts/install-docker.sh /data/devurllist`처럼 지정합니다. 설치 후 UID/GID를 바꾸면 `sqlite`, `logs`, `backup`의 소유자도 함께 변경해야 합니다. 파일은 컨테이너를 내려도 호스트에 그대로 보관됩니다. 사내 공유용이므로 서버 방화벽은 사내망 접근만 허용하세요.

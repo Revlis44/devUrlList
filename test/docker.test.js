@@ -93,12 +93,14 @@ test('Docker 배치 경로로 기동: 로그인, DB·백업·로그 생성, 정�
   let runtime = await launch(t, target);
   assert.equal((await fetch(runtime.base)).status, 200);
   const credentials = { username: 'deployment-test', name: '배치 검증', jobTitle: '대리', password: 'Deployment-Test-Only123!' };
-  const requestOptions = { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dev-site-list' }, body: JSON.stringify(credentials) };
+  const requestOptions = { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dev-site-list', Origin: runtime.base }, body: JSON.stringify(credentials) };
   const signup = await fetch(`${runtime.base}/api/register`, requestOptions);
   assert.equal(signup.status, 201);
+  const crossOrigin = await fetch(`${runtime.base}/api/login`, { ...requestOptions, headers: { ...requestOptions.headers, Origin: 'https://other.example' } });
+  assert.equal(crossOrigin.status, 403);
   const cookie = signup.headers.get('set-cookie').split(';')[0];
   const created = await fetch(`${runtime.base}/api/sites`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dev-site-list', Cookie: cookie },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dev-site-list', Origin: runtime.base, Cookie: cookie },
     body: JSON.stringify({ sortOrder: 3, systemName: '재시작 검증 서버', url: 'https://test.example.com' }),
   });
   assert.equal(created.status, 201);
@@ -107,6 +109,7 @@ test('Docker 배치 경로로 기동: 로그인, DB·백업·로그 생성, 정�
   assert.equal((await readdir(join(target, 'logs'))).filter(name => name.endsWith('.log')).length, 1);
   assert.equal(await runtime.stop(), 0);
   runtime = await launch(t, target);
+  requestOptions.headers.Origin = runtime.base;
   assert.equal((await fetch(`${runtime.base}/api/login`, requestOptions)).status, 200);
   const response = await fetch(`${runtime.base}/api/sites`, { headers: { Cookie: cookie } });
   assert.equal(response.status, 200);

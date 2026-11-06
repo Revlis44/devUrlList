@@ -136,8 +136,16 @@ export function createApp(options = {}) {
         res.setHeader('Set-Cookie', `devsites_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookie ? '; Secure' : ''}`);
         return json(res, 200, { ok: true });
       }
-      if (pathname === '/api/sites' && req.method === 'GET') return json(res, 200, { sites: store.list() });
+      if (pathname === '/api/sites' && req.method === 'GET') return json(res, 200, { sites: store.list(), groups: store.listGroups() });
       if (pathname === '/api/sites' && req.method === 'POST') return json(res, 201, await store.mutate('create', null, await readJson(req), user));
+      if (pathname === '/api/groups' && req.method === 'GET') return json(res, 200, { groups: store.listGroups() });
+      if (pathname === '/api/groups' && req.method === 'POST') return json(res, 201, await store.mutateGroup('create', null, await readJson(req)));
+      const groupMatch = pathname.match(/^\/api\/groups\/(\d+)$/);
+      if (groupMatch && ['PUT', 'DELETE'].includes(req.method)) {
+        const id = Number(groupMatch[1]);
+        if (!Number.isSafeInteger(id)) throw new HttpError(404, '그룹을 찾을 수 없습니다.');
+        return json(res, 200, await store.mutateGroup(req.method === 'PUT' ? 'update' : 'delete', id, await readJson(req)));
+      }
       const match = pathname.match(/^\/api\/sites\/(\d+)(\/history|\/permanent)?$/);
       if (match) {
         const id = Number(match[1]);

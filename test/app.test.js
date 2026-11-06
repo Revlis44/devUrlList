@@ -47,16 +47,20 @@ test('로그인, 두 사용자 변경 이력, 실제 변경 전 백업, 삭제 �
   assert.equal((await first('/api/me')).body.user.name, credentials.name);
   const created = await first('/api/sites', 'POST', sample);
   assert.equal(created.status, 201);
+  assert.equal(created.body.site.updatedByJobTitle, '대리');
   const id = created.body.site.id;
   const updated = await second(`/api/sites/${id}`, 'PUT', { ...sample, notes: '다른 사용자가 수정', version: 1 });
   assert.equal(updated.status, 200);
   assert.equal(updated.body.site.version, 2);
+  assert.equal(updated.body.site.updatedByJobTitle, '과장');
   assert.equal((await first(`/api/sites/${id}`, 'PUT', { ...sample, notes: '오래된 화면', version: 1 })).status, 409);
   const noChange = await second(`/api/sites/${id}`, 'PUT', { ...sample, notes: '다른 사용자가 수정', version: 2 });
   assert.equal(noChange.body.changed, false);
   const history = (await first(`/api/sites/${id}/history`)).body.history;
   assert.equal(history.length, 2);
   assert.equal(history[0].actor, '두 번째 사용자');
+  assert.equal(history[0].actorJobTitle, '과장');
+  assert.equal(history[1].actorJobTitle, '대리');
   assert.equal(history[0].before.notes, '최초 값');
   assert.equal(history[0].after.notes, '다른 사용자가 수정');
   assert.ok(!Number.isNaN(Date.parse(history[0].changedAt)));
@@ -69,10 +73,12 @@ test('로그인, 두 사용자 변경 이력, 실제 변경 전 백업, 삭제 �
   assert.equal((await first(`/api/sites/${id}`, 'DELETE', { version: 2 })).status, 200);
   const listed = (await first('/api/sites')).body.sites;
   assert.equal(listed.length, 1); assert.ok(listed[0].deletedAt);
+  assert.equal(listed[0].updatedByJobTitle, '대리');
   assert.equal((await first(`/api/sites/${id}`, 'PUT', { ...sample, version: 3 })).status, 404);
   const deletedHistory = (await first(`/api/sites/${id}/history`)).body.history;
   assert.equal(deletedHistory.length, 3);
   assert.equal(deletedHistory[0].action, 'delete');
+  assert.equal(deletedHistory[0].actorJobTitle, '대리');
   assert.equal(deletedHistory[0].after.deleted, true);
   assert.equal((await readdir(backupDir)).filter(file => file.endsWith('.sqlite')).length, 5);
   assert.equal((await first('/api/logout', 'POST', {})).status, 200);
@@ -318,4 +324,143 @@ test('완전 삭제: 동시 요청 중 하나만 성공하고 백업도 한 번�
   assert.equal(store.find(site.id), null);
   assert.equal(store.db.prepare('SELECT count(*) AS count FROM history WHERE site_id = ?').get(site.id).count, 0);
   assert.equal((await readdir(backupDir)).length, beforeBackups.length + 1);
+});
+
+test('그룹 생성·계층 이동·이름 변경·빈 그룹 삭제, 백업과 버전 충돌', async t => {
+  const { client, backupDir } = await setup(t); const request = client();
+  assert.equal((await request('/api/groups')).status, 401);
+  assert.equal((await request('/api/groups', 'POST', { name: '인프라' })).status, 401);
+  await request('/api/register', 'POST', credentials);
+  assert.equal((await request('/api/groups', 'POST', { name: '인프라' }, { Origin: 'https://other.example' })).status, 403);
+  const { body: { group: parent } } = await request('/api/groups', 'POST', { name: '인프라' });
+  const { body: { group: child } } = await request('/api/groups', 'POST', { name: '개발', parentId: parent.id });
+  assert.equal(child.parentId, parent.id);
+  assert.equal((await request('/api/sites')).body.groups.length, 2);
+  const before = await readdir(backupDir);
+  assert.equal((await request(`/api/groups/${child.id}`, 'PUT', { ...child })).body.changed, false);
+  assert.deepEqual(await readdir(backupDir), before);
+  const updated = await request(`/api/groups/${child.id}`, 'PUT', { name: '테스트', parentId: null, version: child.version });
+  assert.equal(updated.status, 200); assert.equal(updated.body.group.parentId, null); assert.equal(updated.body.group.version, 2);
+  assert.equal((await request(`/api/groups/${child.id}`, 'PUT', { ...child })).status, 409);
+  assert.equal((await request(`/api/groups/${child.id}`, 'DELETE', { version: 1 })).status, 409);
+  const snapshots = await readdir(backupDir);
+  const snapshot = new DatabaseSync(join(backupDir, snapshots.find(file => !before.includes(file))), { readOnly: true });
+  try {
+    assert.equal(snapshot.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.equal(snapshot.prepare('SELECT parent_id FROM groups WHERE id = ?').get(child.id).parent_id, parent.id);
+  } finally { snapshot.close(); }
+  assert.equal((await request(`/api/groups/${child.id}`, 'DELETE', { version: 2 })).status, 200);
+  assert.equal((await request(`/api/groups/${parent.id}`, 'DELETE', { version: 1 })).status, 200);
+  assert.deepEqual((await request('/api/groups')).body.groups, []);
+  const replacement = await request('/api/groups', 'POST', { name: '다른 그룹' });
+  assert.ok(replacement.body.group.id > child.id);
+});
+
+test('그룹 이름·상위 그룹·중복·순환 구조 검증과 동시 계층 이동', async t => {
+  const { client, store } = await setup(t); const request = client();
+  await request('/api/register', 'POST', credentials);
+  for (const input of [{}, { name: '' }, { name: ' \t ' }, { name: 123 }, { name: 'a'.repeat(101) }, { name: 'a\nb' }, { name: '개발', parentId: '1' }, { name: '개발', parentId: 0 }, { name: '개발', parentId: 999 }]) {
+    assert.equal((await request('/api/groups', 'POST', input)).status, 400);
+  }
+  const { body: { group: a } } = await request('/api/groups', 'POST', { name: 'Platform' });
+  assert.equal((await request('/api/groups', 'POST', { name: ' platform ' })).status, 409);
+  const { body: { group: b } } = await request('/api/groups', 'POST', { name: 'Platform', parentId: a.id });
+  const { body: { group: c } } = await request('/api/groups', 'POST', { name: '서비스', parentId: b.id });
+  for (const parentId of [a.id, b.id, c.id]) assert.equal((await request(`/api/groups/${a.id}`, 'PUT', { ...a, parentId })).status, 400);
+  assert.equal((await request(`/api/groups/${b.id}`, 'PUT', { ...b, parentId: null })).status, 409);
+  assert.equal((await request(`/api/groups/${a.id}`, 'DELETE', { version: 1 })).status, 409);
+  const { body: { group: other } } = await request('/api/groups', 'POST', { name: '외부 그룹' });
+  const results = await Promise.all([
+    request(`/api/groups/${a.id}`, 'PUT', { ...a, parentId: other.id }),
+    request(`/api/groups/${other.id}`, 'PUT', { ...other, parentId: a.id }),
+  ]);
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 400]);
+  assert.equal(store.listGroups().length, 4);
+});
+
+test('서버 그룹 지정·이동·해제와 과거 그룹명 기록, 소속 서버가 있는 그룹 삭제 차단', async t => {
+  const { client, store } = await setup(t); const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { group: parent } } = await request('/api/groups', 'POST', { name: '인프라' });
+  const { body: { group: child } } = await request('/api/groups', 'POST', { name: '개발', parentId: parent.id });
+  for (const groupId of ['1', 0, -1, {}, 1.1, 999]) assert.equal((await request('/api/sites', 'POST', { ...sample, groupId })).status, 400);
+  const { body: { site } } = await request('/api/sites', 'POST', { ...sample, groupId: child.id });
+  assert.equal(site.groupId, child.id);
+  assert.equal((await request(`/api/groups/${child.id}`, 'DELETE', { version: 1 })).status, 409);
+  const legacyUpdate = await request(`/api/sites/${site.id}`, 'PUT', { ...sample, notes: '그룹 필드 생략', version: site.version });
+  assert.equal(legacyUpdate.body.site.groupId, child.id);
+  const moved = await request(`/api/sites/${site.id}`, 'PUT', { ...legacyUpdate.body.site, groupId: parent.id });
+  assert.equal(moved.body.site.groupId, parent.id);
+  const history = store.history(site.id)[0];
+  assert.equal(history.before.groupName, '인프라 / 개발'); assert.equal(history.after.groupName, '인프라');
+  await request(`/api/groups/${child.id}`, 'PUT', { ...child, name: '새 이름' });
+  assert.equal(store.history(site.id)[0].before.groupName, '인프라 / 개발');
+  assert.equal((await request(`/api/groups/${child.id}`, 'DELETE', { version: 2 })).status, 200);
+  const cleared = await request(`/api/sites/${site.id}`, 'PUT', { ...moved.body.site, groupId: null });
+  assert.equal(cleared.body.site.groupId, null);
+  const reassigned = await request(`/api/sites/${site.id}`, 'PUT', { ...cleared.body.site, groupId: parent.id });
+  await request(`/api/sites/${site.id}`, 'DELETE', { version: reassigned.body.site.version });
+  assert.equal((await request(`/api/groups/${parent.id}`, 'DELETE', { version: 1 })).status, 409);
+  assert.equal(store.find(site.id).groupId, parent.id);
+});
+
+test('그룹 변경은 백업 실패 시 저장하지 않고 DB 오류 시 롤백', async t => {
+  const { client, store, backupDir } = await setup(t); const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { group } } = await request('/api/groups', 'POST', { name: '기존 그룹' });
+  store.db.exec("CREATE TRIGGER reject_group_update BEFORE UPDATE ON groups BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+  assert.equal((await request(`/api/groups/${group.id}`, 'PUT', { ...group, name: '실패할 이름' })).status, 500);
+  assert.deepEqual(JSON.parse(JSON.stringify(store.listGroups())), [group]);
+  await rename(backupDir, `${backupDir}-original`); await writeFile(backupDir, '백업 실패 유도');
+  assert.equal((await request('/api/groups', 'POST', { name: '추가 실패' })).status, 503);
+  assert.equal((await request(`/api/groups/${group.id}`, 'PUT', { ...group, name: '수정 실패' })).status, 503);
+  assert.equal((await request(`/api/groups/${group.id}`, 'DELETE', { version: group.version })).status, 503);
+  assert.deepEqual(JSON.parse(JSON.stringify(store.listGroups())), [group]);
+});
+
+test('기존 DB의 미분류 서버·이력 보존 및 그룹과 소속 관계의 재시작 후 유지', async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'devsites-groups-restart-'));
+  const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [sample] };
+  let app = createApp(config);
+  app.store.db.exec("DROP TABLE groups; UPDATE sites SET data = json_remove(data, '$.groupId'); UPDATE history SET after_data = json_remove(after_data, '$.groupId', '$.groupName')");
+  const beforeHistory = app.store.history(1);
+  await app.store.close();
+  app = createApp(config);
+  assert.equal(app.store.find(1).groupId, null); assert.equal(app.store.find(1).systemName, sample.systemName);
+  assert.deepEqual(app.store.history(1), beforeHistory);
+  const { group: parent } = await app.store.mutateGroup('create', null, { name: '상위' });
+  const { group: child } = await app.store.mutateGroup('create', null, { name: '하위', parentId: parent.id });
+  await app.store.mutate('update', 1, { ...sample, groupId: child.id, version: 1 }, { id: null, name: '검증' });
+  await app.store.close();
+  app = createApp(config);
+  t.after(async () => { await app.store.close(); await rm(folder, { recursive: true, force: true }); });
+  assert.equal(app.store.listGroups().length, 2); assert.equal(app.store.find(1).groupId, child.id);
+  assert.equal(app.store.history(1)[0].after.groupName, '상위 / 하위');
+  assert.equal(app.store.history(1)[0].before.groupName, '미분류');
+});
+
+
+test('기존 기록의 사용자 ID로 현재 직급을 조회하고 원본 데이터·초기 등록을 보존', async t => {
+  const { client, store, backupDir } = await setup(t, { seed: [sample] }); const request = client();
+  const registered = await request('/api/register', 'POST', { ...credentials, name: '초기 등록' });
+  const user = registered.body.user;
+  const created = await request('/api/sites', 'POST', { ...sample, actorJobTitle: '위조 직급', updatedByJobTitle: '위조 직급' });
+  const id = created.body.site.id;
+  assert.equal(created.body.site.updatedByJobTitle, credentials.jobTitle);
+  store.db.prepare('UPDATE users SET job_title = ?, name = ? WHERE id = ?').run('부장', '변경된 이름', user.id);
+  const originalSites = store.db.prepare('SELECT * FROM sites ORDER BY id').all();
+  const originalHistory = store.db.prepare('SELECT * FROM history ORDER BY id').all();
+  const originalBackups = await readdir(backupDir);
+  const listed = (await request('/api/sites')).body.sites;
+  assert.equal(listed.find(site => site.id === id).updatedByJobTitle, '부장');
+  assert.equal(listed.find(site => site.id === id).updatedBy, '초기 등록');
+  assert.equal(listed.find(site => site.id === 1).updatedByJobTitle, '');
+  assert.equal((await request(`/api/sites/${id}/history`)).body.history[0].actorJobTitle, '부장');
+  assert.equal((await request('/api/sites/1/history')).body.history[0].actorJobTitle, '');
+  assert.deepEqual(store.db.prepare('SELECT * FROM sites ORDER BY id').all(), originalSites);
+  assert.deepEqual(store.db.prepare('SELECT * FROM history ORDER BY id').all(), originalHistory);
+  assert.deepEqual(await readdir(backupDir), originalBackups);
+  store.db.prepare("UPDATE users SET job_title = '' WHERE id = ?").run(user.id);
+  assert.equal(store.find(id).updatedByJobTitle, '');
+  assert.equal(store.history(id)[0].actorJobTitle, '');
 });

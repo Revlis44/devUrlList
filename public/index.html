@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#3449d8">
+  <title>개발서버 목록 · SAYIT</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/styles.css?ver=20261106_1">
+  <script src="/app.js?ver=20261106" defer></script>
+</head>
+<body>
+  <div id="boot" role="status">개발서버 목록을 불러오는 중입니다…</div>
+  <section id="auth-view" class="auth-layout" hidden aria-label="로그인">
+    <aside class="auth-intro">
+      <a class="brand light" href="/"><span class="brand-mark">S</span><span>SAYIT<span class="brand-sub">DEV DIRECTORY</span></span></a>
+      <div class="intro-copy"><span class="eyebrow">ONE PLACE. EVERY CONNECTION.</span><h1>흩어진 서버 정보를,<br>한곳에서.</h1><p>주소부터 접속 계정까지.<br>우리 팀의 개발 환경을 함께 정리하세요.</p>
+        <div class="intro-points"><span><i>01</i> 필요한 서버를 빠르게 찾고</span><span><i>02</i> 변경 내용은 함께 공유하고</span><span><i>03</i> 모든 기록은 안전하게 보관하세요</span></div>
+      </div>
+      <div class="intro-foot"><span class="status-dot"></span> 우리 팀을 위한 사내 워크스페이스</div>
+    </aside>
+    <div class="auth-main"><div class="auth-card">
+      <span class="eyebrow">WELCOME TO YOUR WORKSPACE</span>
+      <h2 id="auth-title">반가워요, 시작해 볼까요?</h2><p id="auth-description" class="muted">이름과 비밀번호로 로그인해 주세요.</p>
+      <div class="auth-tabs" role="group" aria-label="접속 방식"><button type="button" id="login-tab" class="selected" aria-pressed="true">로그인</button><button type="button" id="register-tab" aria-pressed="false">계정 만들기</button></div>
+      <form id="auth-form">
+        <label for="auth-name">이름</label><input id="auth-name" name="name" placeholder="이름을 입력하세요" autocomplete="username" minlength="2" maxlength="40" required>
+        <label for="auth-password">비밀번호</label><input id="auth-password" name="password" type="password" placeholder="8자 이상 입력하세요" autocomplete="current-password" minlength="8" maxlength="128" required>
+        <div id="password-confirm-wrap" hidden><label for="auth-confirm">비밀번호 확인</label><input id="auth-confirm" type="password" placeholder="비밀번호를 한 번 더 입력하세요" autocomplete="new-password" maxlength="128"></div>
+        <p id="auth-error" class="error" role="alert" hidden></p>
+        <button id="auth-submit" class="button primary auth-submit" type="submit">로그인 <span aria-hidden="true">→</span></button>
+      </form>
+      <p class="auth-note">가입한 이름이 추가·수정·삭제 기록에 남습니다.<br>팀원이 알아볼 수 있는 이름을 사용해 주세요.</p>
+    </div><div class="auth-footer">SAYIT <span>·</span> Internal development directory</div></div>
+  </section>
+
+  <div id="app-view" hidden>
+    <header class="topbar"><div class="brand"><span class="brand-mark">S</span><span>SAYIT<span class="brand-sub">DEV DIRECTORY</span></span></div><div class="topbar-right"><span class="internal-badge"><span class="status-dot"></span> 사내 전용</span><div class="user-chip"><span id="user-avatar" class="avatar"></span><span id="user-name"></span></div><button id="logout" class="text-button">로그아웃</button></div></header>
+    <main>
+      <div class="page-heading"><div><div class="eyebrow">TEAM WORKSPACE <span>/</span> INFRASTRUCTURE</div><h1>개발서버 목록<span class="title-dot">.</span></h1><p class="muted">우리 팀의 서버 주소와 접속 정보를 한곳에서 관리하세요.</p></div><button id="add-site" class="button primary"><span aria-hidden="true">＋</span> 시스템 추가</button></div>
+      <section class="overview" aria-label="목록 요약"><div><span class="stat-label">등록 시스템</span><strong id="active-count">0</strong><span class="stat-unit">개</span></div><div><span class="stat-label">외부접근 가능</span><strong id="external-count">0</strong><span class="stat-unit">개</span></div><div><span class="stat-label">삭제된 시스템</span><strong id="deleted-count">0</strong><span class="stat-unit">개</span></div><p class="backup-note"><span class="backup-icon" aria-hidden="true">↶</span><span><strong>변경 전 자동 백업</strong><small>이름과 변경 내용이 함께 기록됩니다</small></span></p></section>
+      <section class="directory" aria-label="개발서버 목록">
+        <div class="toolbar"><div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="시스템명, URL, IP, 비고 검색" aria-label="시스템 검색"></div><div class="filter-wrap"><label for="access-filter">외부접근</label><select id="access-filter"><option value="all">전체</option><option value="yes">가능</option><option value="no">불가</option><option value="unknown">미확인</option></select></div><button id="refresh" class="button secondary"><span aria-hidden="true">↻</span> 새로고침</button></div>
+        <div class="table-caption"><span>전체 시스템 <strong id="result-count">0</strong></span><span>계정 정보는 ‘보기’를 눌러 확인하세요</span></div>
+        <p id="list-error" class="error list-error" role="alert" hidden></p>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="서버 목록 표, 좌우로 스크롤할 수 있습니다"><table><caption class="sr-only">현재 등록된 개발서버</caption><thead><tr><th scope="col">순서</th><th scope="col">시스템명</th><th scope="col">URL</th><th scope="col">공통계정</th><th scope="col">IP</th><th scope="col">서비스포트</th><th scope="col">SSH포트</th><th scope="col">서버계정</th><th scope="col">외부접근가능여부</th><th scope="col">비고</th><th scope="col">관리 · 기록</th></tr></thead><tbody id="active-rows"></tbody></table></div>
+        <div class="table-footer"><span><span class="small-dot"></span> 순서 기준 오름차순</span><span id="last-loaded"></span></div>
+      </section>
+      <details id="deleted-section" class="deleted-section"><summary><span>삭제된 목록 보기 <span id="deleted-summary-count" class="count-badge">0</span></span><span class="expand-sign" aria-hidden="true"></span></summary><div class="deleted-content"><p>삭제된 항목과 이전 변경 기록은 계속 보관됩니다.</p><div class="table-scroll" tabindex="0" role="region" aria-label="삭제된 서버 목록 표"><table><caption class="sr-only">삭제된 개발서버</caption><thead><tr><th scope="col">순서</th><th scope="col">시스템명</th><th scope="col">URL</th><th scope="col">공통계정</th><th scope="col">IP</th><th scope="col">서비스포트</th><th scope="col">SSH포트</th><th scope="col">서버계정</th><th scope="col">외부접근가능여부</th><th scope="col">비고</th><th scope="col">기록</th></tr></thead><tbody id="deleted-rows"></tbody></table></div></div></details>
+      <footer class="page-footer"><span>SAYIT <span class="muted">/ 개발 환경, 함께 관리합니다.</span></span><span>모든 시간은 한국 시간(KST) 기준</span></footer>
+    </main>
+  </div>
+
+  <dialog id="editor" aria-labelledby="editor-title"><form id="site-form"><div class="dialog-heading"><div><span class="eyebrow">SYSTEM INFORMATION</span><h2 id="editor-title">시스템 추가</h2></div><button type="button" class="close-button" data-close="editor" aria-label="닫기">×</button></div><p class="dialog-description">접속 정보를 입력해 주세요. <span class="required">*</span> 표시는 필수입니다.</p>
+    <div class="form-grid"><div><label for="sortOrder">순서 <span class="required">*</span></label><input id="sortOrder" name="sortOrder" type="number" min="1" max="999999" required></div><div><label for="systemName">시스템명 <span class="required">*</span></label><input id="systemName" name="systemName" maxlength="100" placeholder="예: 개발 웹서비스" required></div><div class="full"><label for="url">URL</label><input id="url" name="url" type="url" maxlength="2000" placeholder="https://dev.example.com"></div><div><label for="ip">IP</label><input id="ip" name="ip" maxlength="45" placeholder="예: 192.0.2.10"></div><div><label for="externalAccess">외부접근가능여부</label><select id="externalAccess" name="externalAccess"><option value="unknown">미확인</option><option value="yes">가능</option><option value="no">불가</option></select></div><div><label for="servicePort">서비스포트</label><input id="servicePort" name="servicePort" maxlength="2000" placeholder="예: 8083 또는 80, 443"></div><div><label for="sshPort">SSH포트</label><input id="sshPort" name="sshPort" maxlength="2000" placeholder="예: 22"></div><div><label for="commonAccount">공통계정</label><textarea id="commonAccount" name="commonAccount" rows="3" maxlength="2000" placeholder="아이디 / 비밀번호" spellcheck="false"></textarea></div><div><label for="serverAccount">서버계정</label><textarea id="serverAccount" name="serverAccount" rows="3" maxlength="2000" placeholder="아이디 / 비밀번호" spellcheck="false"></textarea></div><div class="full"><label for="notes">비고</label><textarea id="notes" name="notes" rows="3" maxlength="4000" placeholder="접속 방법이나 참고할 내용을 남겨 주세요"></textarea></div></div>
+    <p id="editor-error" class="error" role="alert" hidden></p><div class="dialog-actions"><span class="muted">저장 전 자동으로 백업됩니다.</span><button type="button" class="button secondary" data-close="editor">취소</button><button id="save-site" type="submit" class="button primary">저장하기</button></div>
+  </form></dialog>
+  <dialog id="history-dialog" class="history-dialog" aria-labelledby="history-title"><div class="dialog-heading"><div><span class="eyebrow">CHANGE HISTORY</span><h2 id="history-title">변경 기록</h2><p id="history-system" class="muted"></p></div><button type="button" class="close-button" data-close="history-dialog" aria-label="닫기">×</button></div><div class="history-note">누가, 언제, 무엇을 바꿨는지 확인하세요. · 한국 시간(KST)</div><div id="history-content" aria-live="polite"></div></dialog>
+  <dialog id="delete-dialog" class="small-dialog" aria-labelledby="delete-title"><div class="dialog-heading"><h2 id="delete-title">시스템을 삭제할까요?</h2><button type="button" class="close-button" data-close="delete-dialog" aria-label="닫기">×</button></div><p id="delete-name"></p><p class="muted">목록 아래의 ‘삭제된 목록’으로 이동합니다.<br>접속 정보와 변경 기록은 보관됩니다.</p><p id="delete-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button secondary" data-close="delete-dialog">취소</button><button id="confirm-delete" class="button danger">삭제하기</button></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

@@ -1,0 +1,4 @@
+[
+  { "sortOrder": 1, "systemName": "개발 웹서비스 (예시)", "url": "https://dev.example.com", "ip": "192.0.2.10", "servicePort": "8080", "externalAccess": "unknown", "notes": "가상 예시입니다. 실제 서버 정보로 수정해 주세요." },
+  { "sortOrder": 2, "systemName": "스테이징 웹서비스 (예시)", "url": "https://staging.example.com", "ip": "192.0.2.20", "externalAccess": "unknown", "notes": "가상 예시입니다. 실제 서버 정보로 수정해 주세요." }
+]

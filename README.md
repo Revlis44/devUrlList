@@ -32,6 +32,79 @@ node server.js
 
 HTTP로 접속할 때는 `COOKIE_SECURE=true`를 사용하지 않습니다. `.env` 자동 로딩은 없으며 환경변수를 직접 설정하거나 Node의 `--env-file` 옵션을 사용할 수 있습니다. 배포 시 Node 프로세스 하나를 서비스 관리 도구(systemd 등)에 등록하고 자동 재시작을 설정하세요. 한 DB에 여러 프로세스를 동시에 연결하지 않습니다.
 
+## Docker 실행
+
+Linux 서버의 기본 설치 경로를 `/data/devurllist`로 사용합니다. 설치 스크립트에 다른 경로를 전달해도 됩니다. Docker Engine과 Docker Compose v2 이상이 필요하며, 서버에 Node.js를 별도로 설치할 필요는 없습니다. 의존 패키지가 없어 `node:24-bookworm-slim` 공식 이미지에서 소스를 직접 실행합니다.
+
+```text
+/data/devurllist/
+├── compose/
+│   ├── compose.yaml
+│   ├── .env                 접속 포트, 실행 사용자, HTTPS 설정
+│   └── run.sh               Docker Compose 실행 도우미
+├── app/                     실행할 소스 (컨테이너에서 읽기 전용)
+│   ├── server.js
+│   ├── package.json
+│   ├── seed.example.json
+│   ├── lib/
+│   ├── public/
+│   └── docker/logging.js
+├── sqlite/                  sites.sqlite 및 WAL/SHM 파일
+├── logs/                    app-YYYY-MM-DD.log (한국 날짜)
+└── backup/                  변경 전 SQLite 백업
+```
+
+프로젝트 소스를 받은 폴더에서 최초 설치를 준비합니다. 스크립트는 실행에 필요한 소스만 복사하며 실제 사내 데이터, `.git`, 테스트 파일, 기존 백업은 복사하지 않습니다. 컨테이너도 자동으로 시작하지 않습니다.
+
+```sh
+sudo bash scripts/install-docker.sh /data/devurllist
+cd /data/devurllist/compose
+./run.sh config --quiet
+./run.sh up -d --wait
+./run.sh ps
+```
+
+기본 접속 주소는 `http://서버IP:8188`입니다. 컨테이너 내부의 3000 포트를 서버의 8188 포트로 연결합니다. Docker 실행 권한이 없는 계정에서는 `sudo ./run.sh ...` 형태로 실행합니다. 스크립트는 `docker compose`를 우선 사용하고, 플러그인이 없으면 `docker-compose` 명령을 사용합니다. 최초 실행 시 공식 이미지를 내려받으므로 이미지 저장소에 접근할 수 있어야 합니다.
+
+`compose/.env`에서 필요한 값만 수정한 뒤 `./run.sh up -d --wait`로 다시 적용합니다.
+
+기존 설치에서 포트를 바꾸려면 `/data/devurllist/compose/.env`의 `APP_PORT=3000`을 `APP_PORT=8188`로 수정하고, 해당 폴더에서 `docker compose up -d --force-recreate`를 실행합니다. 기존 `.env` 값이 Compose 파일의 기본값보다 우선하므로 실제 설치된 `.env`도 변경해야 합니다.
+
+| 설정 | 기본값 | 의미 |
+| --- | --- | --- |
+| `APP_PORT` | `8188` | 서버에서 공개할 HTTP 포트 |
+| `BIND_IP` | `0.0.0.0` | 접속을 받을 서버 IP. 같은 서버의 HTTPS 프록시만 사용하면 `127.0.0.1`로 변경 |
+| `APP_UID`, `APP_GID` | 설치 실행 사용자 기준 | SQLite·로그·백업 파일의 소유자와 컨테이너 실행 사용자 |
+| `APP_ORIGIN` | 빈 값 | HTTPS 프록시를 사용할 때 브라우저의 최종 주소. 예: `https://servers.example.com` |
+| `COOKIE_SECURE` | `false` | HTTPS 프록시를 사용할 때 `true`로 변경 |
+
+`sudo`로 설치하면 원래 사용자의 UID/GID를 사용합니다. root 계정에서 직접 설치하면 1000:1000으로 지정합니다. 다른 소유자가 필요하면 설치할 때 `sudo APP_UID=1000 APP_GID=1000 bash scripts/install-docker.sh /data/devurllist`처럼 지정합니다. 설치 후 UID/GID를 바꾸면 `sqlite`, `logs`, `backup`의 소유자도 함께 변경해야 합니다. 파일은 컨테이너를 내려도 호스트에 그대로 보관됩니다. 사내 공유용이므로 서버 방화벽은 사내망 접근만 허용하세요.
+
+운영 명령은 다음과 같습니다.
+
+```sh
+cd /data/devurllist/compose
+./run.sh logs -f --tail 100    # 실행·오류 로그 확인
+./run.sh restart              # 애플리케이션 재시작
+./run.sh down                 # 컨테이너 종료, 데이터 폴더는 유지
+./run.sh up -d --wait         # 다시 실행
+```
+
+`logs/`에는 표준 출력·오류가 한국 시간과 함께 날짜별로 쌓입니다. Docker 로그에서도 같은 내용을 확인할 수 있으며 Docker 로그는 10MB 파일 3개로 순환합니다. 호스트의 날짜별 로그와 DB 백업은 자동 삭제하지 않으므로 보관 기간과 디스크 용량은 운영 환경에 맞게 관리합니다. 컨테이너는 비관리자 권한으로 실행하며 서버 재시작 시 다시 올라옵니다. 상태 확인 실패는 `unhealthy`로 표시되고, 프로세스가 종료되면 재시작됩니다.
+
+### 기존 SQLite 데이터 이전
+
+실제 사내 데이터 9개를 유지하려면 **첫 컨테이너 실행 전에** 다음 순서로 옮깁니다.
+
+1. 기존 Node.js 서버를 정상 종료합니다. 실행 중인 DB 파일만 따로 복사하지 않습니다.
+2. 원본 프로젝트의 `data/` 내용 전체를 설치 폴더의 `sqlite/`로 복사합니다. 기존 `backups/`가 있으면 설치 폴더의 `backup/`으로 복사합니다. 대상에 기존 DB가 있으면 먼저 별도 보관합니다.
+3. 복사한 파일과 폴더의 소유자를 `compose/.env`의 `APP_UID:APP_GID`로 맞춥니다. 예: `sudo chown -R 1000:1000 /data/devurllist/sqlite /data/devurllist/backup`.
+4. `compose/run.sh up -d --wait`로 실행합니다.
+
+데이터를 옮기지 않으면 공개용 가상 예시 2개로 새 DB를 생성합니다. 최초 설치 스크립트는 기존 `app` 또는 `compose`에 파일이 있으면 중단하여 운영 소스와 설정을 덮어쓰지 않습니다. 소스를 갱신할 때는 컨테이너를 내리고 `app/`의 실행 파일만 새 버전으로 교체한 뒤 다시 실행합니다. `sqlite/`, `logs/`, `backup/`, `compose/.env`는 유지합니다.
+
+Docker 구성은 [Compose 서비스 명세](https://docs.docker.com/reference/compose-file/services/)와 [Node.js 공식 이미지](https://github.com/nodejs/docker-node)를 기준으로 작성했습니다.
+
 ## 기능
 
 - 컬럼: 순서, 시스템명, URL, 공통계정, IP, 서비스포트, SSH포트, 서버계정, 외부접근가능여부, 비고, 관리·기록.
@@ -81,7 +154,7 @@ node --input-type=module -e "import { DatabaseSync } from 'node:sqlite'; const d
 npm test
 ```
 
-별도 임시 DB로 로그인·가입, 두 사용자 변경 이력, 동시 수정 충돌, 변경 전 백업의 무결성과 실제 내용, 백업 실패 시 저장 중단, 삭제 보관, 요청 검증, 트랜잭션 롤백, 재시작 후 데이터 유지를 확인합니다. 운영 데이터는 테스트에 사용하지 않습니다.
+별도 임시 DB로 로그인·가입, 두 사용자 변경 이력, 동시 수정 충돌, 변경 전 백업의 무결성과 실제 내용, 백업 실패 시 저장 중단, 삭제 보관, 요청 검증, 트랜잭션 롤백, 재시작 후 데이터 유지를 확인합니다. 운영 데이터는 테스트에 사용하지 않습니다. Docker 관련 검증은 설치 디렉터리와 파일 권한, 실제 데이터의 복사 제외, 날짜별 로그, 배치된 소스의 재시작 후 데이터 유지도 확인합니다. Docker Engine을 사용하는 실제 컨테이너 검증과는 구분됩니다.
 
 ## 파일
 
@@ -94,6 +167,12 @@ public/app.js       검색, 인증, 목록 관리, 팝업 동작
 public/favicon.svg 사이트 아이콘
 seed.example.json  비밀번호 없는 초기 목록 예시
 test/app.test.js    기능·저장·인증 통합 검증
+docker/compose.yaml Docker 컨테이너와 디렉터리 연결
+docker/.env.example Docker 환경설정 예시
+docker/run.sh       설치 폴더에서 Compose 명령 실행
+docker/logging.js   표준 출력과 날짜별 파일 로그 동시 기록
+scripts/install-docker.sh 설치 디렉터리 및 실행 소스 준비
+test/docker.test.js 설치·로그·배치 경로 통합 검증
 ```
 
 CSS·JavaScript URL에는 `?ver=yyyyMMdd` 캐시 버전을 적용합니다. 같은 날짜에 다시 변경하면 `_N`을 붙입니다. 화면 작업 전후 캡처는 프로젝트의 `frontDiff/`에 보관합니다.

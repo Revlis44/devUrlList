@@ -226,3 +226,96 @@ test('재시작 후 사용자·목록·이력 유지, 초기 데이터는 한 �
   assert.equal(app.store.history(1).length, 2);
   assert.deepEqual({ ...app.store.db.prepare('SELECT username, name, job_title AS jobTitle FROM users').get() }, { username: 'restart-user', name: '지속성 확인', jobTitle: '과장' });
 });
+
+test('완전 삭제: 삭제된 항목만 허용, 버전·로그인·출처 검증, 실제 DELETE와 백업 보존', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { site } } = await request('/api/sites', 'POST', sample);
+  const { body: { site: untouched } } = await request('/api/sites', 'POST', { ...sample, sortOrder: 2, systemName: '보존할 서버' });
+  const path = `/api/sites/${site.id}/permanent`;
+  assert.equal((await request(path, 'DELETE', { version: site.version })).status, 409);
+  assert.equal((await request(`/api/sites/${site.id}`, 'DELETE', { version: site.version })).status, 200);
+  const deleted = store.find(site.id);
+  const history = store.history(site.id);
+  const beforeBackups = await readdir(backupDir);
+  assert.equal((await client()(path, 'DELETE', { version: deleted.version })).status, 401);
+  assert.equal((await request(path, 'DELETE', { version: deleted.version }, { Origin: 'https://other.example' })).status, 403);
+  assert.equal((await request(path, 'DELETE', { version: deleted.version }, { 'X-Requested-With': '' })).status, 403);
+  for (const body of [{}, { version: site.version }, { version: String(deleted.version) }]) {
+    assert.equal((await request(path, 'DELETE', body)).status, 409);
+  }
+  assert.equal((await request(path)).status, 404);
+  assert.equal((await request(path, 'PUT', { version: deleted.version })).status, 404);
+  assert.equal((await request(`/api/sites/${site.id}`, 'DELETE', { version: deleted.version })).status, 404);
+  assert.deepEqual(store.find(site.id), deleted);
+  assert.deepEqual(store.history(site.id), history);
+  assert.deepEqual(await readdir(backupDir), beforeBackups);
+  const result = await request(path, 'DELETE', { version: deleted.version });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.changed, true);
+  assert.equal(store.db.prepare('SELECT count(*) AS count FROM sites WHERE id = ?').get(site.id).count, 0);
+  assert.equal(store.db.prepare('SELECT count(*) AS count FROM history WHERE site_id = ?').get(site.id).count, 0);
+  assert.deepEqual((await request('/api/sites')).body.sites, [untouched]);
+  assert.equal((await request(`/api/sites/${site.id}/history`)).status, 404);
+  assert.equal((await request(path, 'DELETE', { version: deleted.version })).status, 404);
+  assert.equal((await request('/api/sites/999999/permanent', 'DELETE', { version: 1 })).status, 404);
+  const afterBackups = await readdir(backupDir);
+  assert.equal(afterBackups.length, beforeBackups.length + 1);
+  assert.ok(beforeBackups.every(file => afterBackups.includes(file)));
+  const snapshot = afterBackups.find(file => !beforeBackups.includes(file));
+  const backup = new DatabaseSync(join(backupDir, snapshot), { readOnly: true });
+  try {
+    assert.equal(backup.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.equal(backup.prepare('SELECT deleted_at FROM sites WHERE id = ?').get(site.id).deleted_at, deleted.deletedAt);
+    assert.equal(backup.prepare('SELECT count(*) AS count FROM history WHERE site_id = ?').get(site.id).count, history.length);
+  } finally { backup.close(); }
+  assert.equal(store.history(untouched.id).length, 1);
+});
+
+test('완전 삭제: 백업 실패 시 서버 정보와 변경 기록 보존', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { site } } = await request('/api/sites', 'POST', sample);
+  await request(`/api/sites/${site.id}`, 'DELETE', { version: site.version });
+  const deleted = store.find(site.id);
+  const history = store.history(site.id);
+  await rename(backupDir, `${backupDir}-original`);
+  await writeFile(backupDir, '백업 실패 유도');
+  assert.equal((await request(`/api/sites/${site.id}/permanent`, 'DELETE', { version: deleted.version })).status, 503);
+  assert.deepEqual(store.find(site.id), deleted);
+  assert.deepEqual(store.history(site.id), history);
+});
+
+test('완전 삭제: 서버 삭제 실패 시 먼저 지운 변경 기록도 롤백', async t => {
+  const { client, store } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { site } } = await request('/api/sites', 'POST', sample);
+  await request(`/api/sites/${site.id}`, 'DELETE', { version: site.version });
+  const deleted = store.find(site.id);
+  const history = store.history(site.id);
+  store.db.exec("CREATE TRIGGER reject_site_delete BEFORE DELETE ON sites BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+  assert.equal((await request(`/api/sites/${site.id}/permanent`, 'DELETE', { version: deleted.version })).status, 500);
+  assert.deepEqual(store.find(site.id), deleted);
+  assert.deepEqual(store.history(site.id), history);
+});
+
+test('완전 삭제: 동시 요청 중 하나만 성공하고 백업도 한 번만 생성', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { site } } = await request('/api/sites', 'POST', sample);
+  await request(`/api/sites/${site.id}`, 'DELETE', { version: site.version });
+  const deleted = store.find(site.id);
+  const beforeBackups = await readdir(backupDir);
+  const results = await Promise.all([
+    request(`/api/sites/${site.id}/permanent`, 'DELETE', { version: deleted.version }),
+    request(`/api/sites/${site.id}/permanent`, 'DELETE', { version: deleted.version }),
+  ]);
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 404]);
+  assert.equal(store.find(site.id), null);
+  assert.equal(store.db.prepare('SELECT count(*) AS count FROM history WHERE site_id = ?').get(site.id).count, 0);
+  assert.equal((await readdir(backupDir)).length, beforeBackups.length + 1);
+});

@@ -7,7 +7,7 @@
   <title>개발서버 목록 · SAYIT</title>
   <link rel="icon" type="image/png" href="/favicon.png?ver=20261106">
   <link rel="stylesheet" href="/styles.css?ver=20261106_3">
-  <script src="/app.js?ver=20261106_1" defer></script>
+  <script src="/app.js?ver=20261106_2" defer></script>
 </head>
 <body>
   <div id="boot" role="status">개발서버 목록을 불러오는 중입니다…</div>
@@ -50,7 +50,7 @@
         <div class="table-scroll" tabindex="0" role="region" aria-label="서버 목록 표, 좌우로 스크롤할 수 있습니다"><table><caption class="sr-only">현재 등록된 개발서버</caption><thead><tr><th scope="col">순서</th><th scope="col">시스템명</th><th scope="col">URL</th><th scope="col">공통계정</th><th scope="col">IP</th><th scope="col">서비스포트</th><th scope="col">SSH포트</th><th scope="col">서버계정</th><th scope="col">외부접근가능여부</th><th scope="col">비고</th><th scope="col">관리 · 기록</th></tr></thead><tbody id="active-rows"></tbody></table></div>
         <div class="table-footer"><span><span class="small-dot"></span> 순서 기준 오름차순</span><span id="last-loaded"></span></div>
       </section>
-      <details id="deleted-section" class="deleted-section"><summary><span>삭제된 목록 보기 <span id="deleted-summary-count" class="count-badge">0</span></span><span class="expand-sign" aria-hidden="true"></span></summary><div class="deleted-content"><p>삭제된 항목과 이전 변경 기록은 계속 보관됩니다.</p><div class="table-scroll" tabindex="0" role="region" aria-label="삭제된 서버 목록 표"><table><caption class="sr-only">삭제된 개발서버</caption><thead><tr><th scope="col">순서</th><th scope="col">시스템명</th><th scope="col">URL</th><th scope="col">공통계정</th><th scope="col">IP</th><th scope="col">서비스포트</th><th scope="col">SSH포트</th><th scope="col">서버계정</th><th scope="col">외부접근가능여부</th><th scope="col">비고</th><th scope="col">기록</th></tr></thead><tbody id="deleted-rows"></tbody></table></div></div></details>
+      <details id="deleted-section" class="deleted-section"><summary><span>삭제된 목록 보기 <span id="deleted-summary-count" class="count-badge">0</span></span><span class="expand-sign" aria-hidden="true"></span></summary><div class="deleted-content"><p>삭제된 항목과 이전 변경 기록은 보관됩니다. 완전 삭제하면 접속 정보와 변경 기록이 함께 삭제됩니다.</p><div class="table-scroll" tabindex="0" role="region" aria-label="삭제된 서버 목록 표"><table><caption class="sr-only">삭제된 개발서버</caption><thead><tr><th scope="col">순서</th><th scope="col">시스템명</th><th scope="col">URL</th><th scope="col">공통계정</th><th scope="col">IP</th><th scope="col">서비스포트</th><th scope="col">SSH포트</th><th scope="col">서버계정</th><th scope="col">외부접근가능여부</th><th scope="col">비고</th><th scope="col">관리 · 기록</th></tr></thead><tbody id="deleted-rows"></tbody></table></div></div></details>
       <footer class="page-footer"><span>SAYIT <span class="muted">/ 개발 환경, 함께 관리합니다.</span></span><span>모든 시간은 한국 시간(KST) 기준</span></footer>
     </main>
   </div>
@@ -60,7 +60,7 @@
     <p id="editor-error" class="error" role="alert" hidden></p><div class="dialog-actions"><span class="muted">저장 전 자동으로 백업됩니다.</span><button type="button" class="button secondary" data-close="editor">취소</button><button id="save-site" type="submit" class="button primary">저장하기</button></div>
   </form></dialog>
   <dialog id="history-dialog" class="history-dialog" aria-labelledby="history-title"><div class="dialog-heading"><div><span class="eyebrow">CHANGE HISTORY</span><h2 id="history-title">변경 기록</h2><p id="history-system" class="muted"></p></div><button type="button" class="close-button" data-close="history-dialog" aria-label="닫기">×</button></div><div class="history-note">누가, 언제, 무엇을 바꿨는지 확인하세요. · 한국 시간(KST)</div><div id="history-content" aria-live="polite"></div></dialog>
-  <dialog id="delete-dialog" class="small-dialog" aria-labelledby="delete-title"><div class="dialog-heading"><h2 id="delete-title">시스템을 삭제할까요?</h2><button type="button" class="close-button" data-close="delete-dialog" aria-label="닫기">×</button></div><p id="delete-name"></p><p class="muted">목록 아래의 ‘삭제된 목록’으로 이동합니다.<br>접속 정보와 변경 기록은 보관됩니다.</p><p id="delete-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button secondary" data-close="delete-dialog">취소</button><button id="confirm-delete" class="button danger">삭제하기</button></div></dialog>
+  <dialog id="delete-dialog" class="small-dialog" aria-labelledby="delete-title" aria-describedby="delete-name delete-description"><div class="dialog-heading"><h2 id="delete-title">시스템을 삭제할까요?</h2><button type="button" class="close-button" data-close="delete-dialog" aria-label="닫기">×</button></div><p id="delete-name"></p><p id="delete-description" class="muted">목록 아래의 ‘삭제된 목록’으로 이동합니다.<br>접속 정보와 변경 기록은 보관됩니다.</p><p id="delete-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button secondary" data-close="delete-dialog">취소</button><button id="confirm-delete" class="button danger">삭제하기</button></div></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
 </body>
 </html>

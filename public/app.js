@@ -65,7 +65,7 @@ function secretCell(site, field) {
 function row(site) {
   const value = key => site[key] ? escapeHtml(site[key]) : '<span class="dash">—</span>';
   const url = site.url ? new URL(site.url) : null;
-  return `<tr><td>${site.sortOrder.toString().padStart(2, '0')}</td><td class="system-name">${escapeHtml(site.systemName)}<span class="row-meta">${site.deletedAt ? '삭제 ' : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(site.updatedBy)}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? '' : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>`;
+  return `<tr><td>${site.sortOrder.toString().padStart(2, '0')}</td><td class="system-name">${escapeHtml(site.systemName)}<span class="row-meta">${site.deletedAt ? '삭제 ' : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(site.updatedBy)}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>`;
 }
 function render() {
   const active = sites.filter(site => !site.deletedAt);
@@ -135,13 +135,20 @@ $('logout').addEventListener('click', async () => { try { await api('/api/logout
 $('search').addEventListener('input', render); $('access-filter').addEventListener('change', render); $('refresh').addEventListener('click', loadSites); $('add-site').addEventListener('click', () => openEditor());
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
 $('editor').addEventListener('close', () => { $('site-form').reset(); editing = null; });
+$('delete-dialog').addEventListener('close', () => { deleting = null; });
 $('history-dialog').addEventListener('close', () => { historyRequest++; histories = []; $('history-content').replaceChildren(); });
 for (const id of ['active-rows', 'deleted-rows']) $(id).addEventListener('click', event => {
   const button = event.target.closest('button[data-action]'); if (!button) return;
   const site = sites.find(item => item.id === Number(button.dataset.id)); if (!site) return;
   if (button.dataset.action === 'edit') openEditor(site);
   if (button.dataset.action === 'history') openHistory(site);
-  if (button.dataset.action === 'delete') { deleting = site; errorAt('delete-error'); $('delete-name').textContent = site.systemName; $('delete-dialog').showModal(); }
+  if (['delete', 'permanent-delete'].includes(button.dataset.action)) {
+    deleting = site; errorAt('delete-error'); $('delete-name').textContent = site.systemName;
+    $('delete-title').textContent = site.deletedAt ? '시스템을 완전 삭제할까요?' : '시스템을 삭제할까요?';
+    $('delete-description').textContent = site.deletedAt ? '접속 정보와 변경 기록이 완전히 삭제되며, 목록에서 복구할 수 없습니다. 계속하시겠습니까?' : '목록 아래의 ‘삭제된 목록’으로 이동합니다. 접속 정보와 변경 기록은 보관됩니다.';
+    $('confirm-delete').textContent = site.deletedAt ? '완전 삭제하기' : '삭제하기';
+    $('delete-dialog').showModal(); $('delete-dialog').querySelector('.button[data-close]').focus();
+  }
   if (button.dataset.action === 'secret') {
     const field = button.dataset.field; const key = `${site.id}:${field}`;
     revealed.has(key) ? revealed.delete(key) : revealed.add(key);
@@ -160,7 +167,11 @@ $('site-form').addEventListener('submit', async event => {
 });
 $('confirm-delete').addEventListener('click', async () => {
   if (!deleting) return; $('confirm-delete').disabled = true; errorAt('delete-error');
-  try { await api(`/api/sites/${deleting.id}`, { method: 'DELETE', body: { version: deleting.version } }); $('delete-dialog').close(); toast('삭제된 목록으로 이동했습니다. 변경 기록이 보관됩니다.'); await loadSites(); }
+  const item = deleting;
+  try {
+    await api(`/api/sites/${item.id}${item.deletedAt ? '/permanent' : ''}`, { method: 'DELETE', body: { version: item.version } });
+    $('delete-dialog').close(); toast(item.deletedAt ? '서버 정보와 변경 기록이 완전히 삭제되었습니다.' : '삭제된 목록으로 이동했습니다. 변경 기록이 보관됩니다.'); await loadSites();
+  }
   catch (error) { errorAt('delete-error', error.message); }
   finally { $('confirm-delete').disabled = false; }
 });

@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#3449d8">
   <title>개발서버 목록 · SAYIT</title>
-  <link rel="icon" href="/favicon.svg">
-  <link rel="stylesheet" href="/styles.css?ver=20261106_1">
-  <script src="/app.js?ver=20261106" defer></script>
+  <link rel="icon" type="image/png" href="/favicon.png?ver=20261106">
+  <link rel="stylesheet" href="/styles.css?ver=20261106_3">
+  <script src="/app.js?ver=20261106_1" defer></script>
 </head>
 <body>
   <div id="boot" role="status">개발서버 목록을 불러오는 중입니다…</div>
   <section id="auth-view" class="auth-layout" hidden aria-label="로그인">
     <aside class="auth-intro">
-      <a class="brand light" href="/"><span class="brand-mark">S</span><span>SAYIT<span class="brand-sub">DEV DIRECTORY</span></span></a>
+      <a class="brand light" href="/"><img class="brand-mark" src="/favicon.png?ver=20261106" width="36" height="36" alt=""><span>SAYIT<span class="brand-sub">DEV DIRECTORY</span></span></a>
       <div class="intro-copy"><span class="eyebrow">ONE PLACE. EVERY CONNECTION.</span><h1>흩어진 서버 정보를,<br>한곳에서.</h1><p>주소부터 접속 계정까지.<br>우리 팀의 개발 환경을 함께 정리하세요.</p>
         <div class="intro-points"><span><i>01</i> 필요한 서버를 빠르게 찾고</span><span><i>02</i> 변경 내용은 함께 공유하고</span><span><i>03</i> 모든 기록은 안전하게 보관하세요</span></div>
       </div>
@@ -21,10 +21,14 @@
     </aside>
     <div class="auth-main"><div class="auth-card">
       <span class="eyebrow">WELCOME TO YOUR WORKSPACE</span>
-      <h2 id="auth-title">반가워요, 시작해 볼까요?</h2><p id="auth-description" class="muted">이름과 비밀번호로 로그인해 주세요.</p>
+      <h2 id="auth-title">반가워요, 시작해 볼까요?</h2><p id="auth-description" class="muted">아이디와 비밀번호로 로그인해 주세요.</p>
       <div class="auth-tabs" role="group" aria-label="접속 방식"><button type="button" id="login-tab" class="selected" aria-pressed="true">로그인</button><button type="button" id="register-tab" aria-pressed="false">계정 만들기</button></div>
       <form id="auth-form">
-        <label for="auth-name">이름</label><input id="auth-name" name="name" placeholder="이름을 입력하세요" autocomplete="username" minlength="2" maxlength="40" required>
+        <label for="auth-username">아이디</label><input id="auth-username" name="username" placeholder="아이디를 입력하세요" autocomplete="username" maxlength="40" required>
+        <div id="register-details" hidden>
+          <label for="auth-name">이름</label><input id="auth-name" name="name" placeholder="이름을 입력하세요" autocomplete="name" minlength="2" maxlength="40">
+          <label for="auth-job-title">직급</label><input id="auth-job-title" name="jobTitle" placeholder="예: 사원, 대리, 과장" autocomplete="organization-title" maxlength="40">
+        </div>
         <label for="auth-password">비밀번호</label><input id="auth-password" name="password" type="password" placeholder="비밀번호를 입력하세요" autocomplete="current-password" maxlength="128" required>
         <div id="password-confirm-wrap" hidden><label for="auth-confirm">비밀번호 확인</label><input id="auth-confirm" type="password" placeholder="비밀번호를 한 번 더 입력하세요" autocomplete="new-password" maxlength="128"></div>
         <p id="auth-error" class="error" role="alert" hidden></p>
@@ -35,7 +39,7 @@
   </section>
 
   <div id="app-view" hidden>
-    <header class="topbar"><div class="brand"><span class="brand-mark">S</span><span>SAYIT<span class="brand-sub">DEV DIRECTORY</span></span></div><div class="topbar-right"><span class="internal-badge"><span class="status-dot"></span> 사내 전용</span><div class="user-chip"><span id="user-avatar" class="avatar"></span><span id="user-name"></span></div><button id="logout" class="text-button">로그아웃</button></div></header>
+    <header class="topbar"><div class="brand"><span class="brand-mark">S</span><span>SAYIT<span class="brand-sub">DEV DIRECTORY</span></span></div><div class="topbar-right"><span class="internal-badge"><span class="status-dot"></span> 사내 전용</span><div class="user-chip"><span id="user-avatar" class="avatar"></span><span><span id="user-name"></span><span id="user-account" class="row-meta"></span></span></div><button id="logout" class="text-button">로그아웃</button></div></header>
     <main>
       <div class="page-heading"><div><div class="eyebrow">TEAM WORKSPACE <span>/</span> INFRASTRUCTURE</div><h1>개발서버 목록<span class="title-dot">.</span></h1><p class="muted">우리 팀의 서버 주소와 접속 정보를 한곳에서 관리하세요.</p></div><button id="add-site" class="button primary"><span aria-hidden="true">＋</span> 시스템 추가</button></div>
       <section class="overview" aria-label="목록 요약"><div><span class="stat-label">등록 시스템</span><strong id="active-count">0</strong><span class="stat-unit">개</span></div><div><span class="stat-label">외부접근 가능</span><strong id="external-count">0</strong><span class="stat-unit">개</span></div><div><span class="stat-label">삭제된 시스템</span><strong id="deleted-count">0</strong><span class="stat-unit">개</span></div><p class="backup-note"><span class="backup-icon" aria-hidden="true">↶</span><span><strong>변경 전 자동 백업</strong><small>이름과 변경 내용이 함께 기록됩니다</small></span></p></section>

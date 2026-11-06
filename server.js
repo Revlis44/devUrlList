@@ -50,6 +50,7 @@ export function createApp(options = {}) {
     ['/', ['index.html', 'text/html; charset=utf-8']],
     ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
     ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+    ['/favicon.png', ['favicon.png', 'image/png']],
     ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],
   ]);
   const attempts = new Map();
@@ -68,7 +69,7 @@ export function createApp(options = {}) {
   function userFrom(req) {
     const token = tokenFrom(req);
     if (!/^[a-f0-9]{64}$/.test(token)) return null;
-    return store.db.prepare('SELECT users.id, users.name FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ?').get(digest(token), Date.now()) ?? null;
+    return store.db.prepare('SELECT users.id, users.username, users.name, users.job_title AS jobTitle FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ?').get(digest(token), Date.now()) ?? null;
   }
   function setSession(req, res, user) {
     const token = randomBytes(32).toString('hex');
@@ -108,19 +109,22 @@ export function createApp(options = {}) {
       if (['/api/register', '/api/login'].includes(pathname) && req.method === 'POST') {
         rateLimit(req);
         const body = await readJson(req);
-        const name = typeof body.name === 'string' ? body.name.normalize('NFKC').trim() : '';
+        const username = typeof body.username === 'string' ? body.username.normalize('NFKC').trim() : '';
         const password = body.password;
-        if (name.length < 2 || name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(name) || typeof password !== 'string' || password.length > 128 || !password.trim()) {
-          throw new HttpError(400, '이름은 2~40자, 비밀번호는 공백만 사용하지 않고 1~128자로 입력해 주세요.');
-        }
+        if (!username || username.length > 40 || /[\s\p{Cc}\p{Cf}]/u.test(username)) throw new HttpError(400, '아이디는 공백 없이 1~40자로 입력해 주세요.');
+        if (typeof password !== 'string' || password.length > 128 || !password.trim()) throw new HttpError(400, '비밀번호는 공백만 사용하지 않고 1~128자로 입력해 주세요.');
         let user;
         if (pathname === '/api/register') {
-          user = await store.createUser(name, await hashPassword(password));
+          const name = typeof body.name === 'string' ? body.name.normalize('NFKC').trim() : '';
+          const jobTitle = typeof body.jobTitle === 'string' ? body.jobTitle.normalize('NFKC').trim() : '';
+          if (name.length < 2 || name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new HttpError(400, '이름은 2~40자로 입력해 주세요.');
+          if (!jobTitle || jobTitle.length > 40 || /[\p{Cc}\p{Cf}]/u.test(jobTitle)) throw new HttpError(400, '직급은 1~40자로 입력해 주세요.');
+          user = await store.createUser({ username, name, jobTitle }, await hashPassword(password));
         } else {
-          const found = store.db.prepare('SELECT * FROM users WHERE name = ?').get(name);
+          const found = store.db.prepare('SELECT * FROM users WHERE username = ?').get(username);
           const valid = await verifyPassword(password, found?.password_hash);
-          if (!found || !valid) throw new HttpError(401, '이름 또는 비밀번호가 올바르지 않습니다.');
-          user = { id: found.id, name: found.name };
+          if (!found || !valid) throw new HttpError(401, '아이디 또는 비밀번호가 올바르지 않습니다.');
+          user = { id: found.id, username: found.username, name: found.name, jobTitle: found.job_title };
         }
         setSession(req, res, user);
         return json(res, pathname === '/api/register' ? 201 : 200, { user });

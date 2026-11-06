@@ -35,6 +35,7 @@ function showAuth() {
 }
 async function showApp(user) {
   currentUser = user; $('user-name').textContent = `${user.name}님`; $('user-avatar').textContent = user.name.slice(0, 1);
+  $('user-account').textContent = `${user.username} · ${user.jobTitle}`;
   $('auth-form').reset(); errorAt('auth-error'); $('auth-view').hidden = true; $('boot').hidden = true; $('app-view').hidden = false;
   $('deleted-section').open = false; $('search').value = ''; $('access-filter').value = 'all';
   await loadSites();
@@ -113,8 +114,9 @@ function setAuthMode(register) {
   $('login-tab').classList.toggle('selected', !register); $('register-tab').classList.toggle('selected', register);
   $('login-tab').setAttribute('aria-pressed', String(!register)); $('register-tab').setAttribute('aria-pressed', String(register));
   $('auth-title').textContent = register ? '함께 사용할 계정을 만드세요' : '반가워요, 시작해 볼까요?';
-  $('auth-description').textContent = register ? '이름과 비밀번호만 있으면 바로 시작할 수 있어요.' : '이름과 비밀번호로 로그인해 주세요.';
+  $('auth-description').textContent = register ? '아이디, 이름, 직급과 비밀번호를 입력해 주세요.' : '아이디와 비밀번호로 로그인해 주세요.';
   $('auth-submit').textContent = register ? '계정 만들고 시작하기 →' : '로그인 →'; $('password-confirm-wrap').hidden = !register; $('auth-confirm').required = register;
+  $('register-details').hidden = !register; $('auth-name').required = register; $('auth-job-title').required = register;
   $('auth-password').autocomplete = register ? 'new-password' : 'current-password';
 }
 $('login-tab').addEventListener('click', () => setAuthMode(false));
@@ -123,7 +125,9 @@ $('auth-form').addEventListener('submit', async event => {
   event.preventDefault(); errorAt('auth-error');
   if (registerMode && $('auth-password').value !== $('auth-confirm').value) return errorAt('auth-error', '비밀번호 확인이 일치하지 않습니다.');
   $('auth-submit').disabled = true;
-  try { const result = await api(registerMode ? '/api/register' : '/api/login', { method: 'POST', body: { name: $('auth-name').value, password: $('auth-password').value } }); await showApp(result.user); }
+  const body = { username: $('auth-username').value, password: $('auth-password').value };
+  if (registerMode) { body.name = $('auth-name').value; body.jobTitle = $('auth-job-title').value; }
+  try { const result = await api(registerMode ? '/api/register' : '/api/login', { method: 'POST', body }); await showApp(result.user); }
   catch (error) { errorAt('auth-error', error.message || '서버에 연결할 수 없습니다.'); }
   finally { $('auth-submit').disabled = false; }
 });

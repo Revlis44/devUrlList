@@ -92,7 +92,7 @@ test('Docker 배치 경로로 기동: 로그인, DB·백업·로그 생성, 정�
   const { target } = await install(t);
   let runtime = await launch(t, target);
   assert.equal((await fetch(runtime.base)).status, 200);
-  const credentials = { name: '배치 검증', password: 'Deployment-Test-Only123!' };
+  const credentials = { username: 'deployment-test', name: '배치 검증', jobTitle: '대리', password: 'Deployment-Test-Only123!' };
   const requestOptions = { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dev-site-list' }, body: JSON.stringify(credentials) };
   const signup = await fetch(`${runtime.base}/api/register`, requestOptions);
   assert.equal(signup.status, 201);

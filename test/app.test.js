@@ -28,7 +28,7 @@ async function setup(t, options = {}) {
 }
 
 const sample = { sortOrder: 1, systemName: '검증 서버', url: 'https://example.internal', commonAccount: 'tester / sample-password', ip: '192.168.1.20', servicePort: '8080, 443', sshPort: '22', serverAccount: 'dev', externalAccess: 'no', notes: '최초 값' };
-const credentials = { name: '검증 사용자', password: 'OnlyTestPassword123!' };
+const credentials = { username: 'test-user', name: '검증 사용자', jobTitle: '대리', password: 'OnlyTestPassword123!' };
 
 test('로그인, 두 사용자 변경 이력, 실제 변경 전 백업, 삭제 보관, 세션 종료', async t => {
   const { client, store, backupDir } = await setup(t);
@@ -43,7 +43,7 @@ test('로그인, 두 사용자 변경 이력, 실제 변경 전 백업, 삭제 �
   assert.equal(user.password_hash.includes(credentials.password), false);
   assert.equal((await second('/api/register', 'POST', credentials)).status, 409);
   assert.equal((await second('/api/login', 'POST', { ...credentials, password: 'WrongPassword123!' })).status, 401);
-  assert.equal((await second('/api/register', 'POST', { name: '두 번째 사용자', password: 'OtherTestPassword123!' })).status, 201);
+  assert.equal((await second('/api/register', 'POST', { username: 'second-user', name: '두 번째 사용자', jobTitle: '과장', password: 'OtherTestPassword123!' })).status, 201);
   assert.equal((await first('/api/me')).body.user.name, credentials.name);
   const created = await first('/api/sites', 'POST', sample);
   assert.equal(created.status, 201);
@@ -84,13 +84,71 @@ test('짧은 비밀번호와 최대 길이 비밀번호로 가입, 로그아웃 
   const { client } = await setup(t);
   for (const length of [1, 3, 7, 128]) {
     const request = client();
-    const account = { name: `길이 ${length} 검증`, password: '1'.repeat(length) };
+    const account = { username: `length-${length}`, name: `길이 ${length} 검증`, jobTitle: '사원', password: '1'.repeat(length) };
     assert.equal((await request('/api/register', 'POST', account)).status, 201);
     assert.equal((await request('/api/logout', 'POST', {})).status, 200);
     assert.equal((await request('/api/login', 'POST', { ...account, password: '2' })).status, 401);
     assert.equal((await request('/api/login', 'POST', account)).status, 200);
     assert.equal((await request('/api/me')).body.user.name, account.name);
   }
+});
+
+test('아이디로 가입·로그인하고 이름·직급을 반환, 중복 아이디 차단', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  const account = { username: 'member.one', name: '홍길동', jobTitle: '대리', password: '1' };
+  const registered = await request('/api/register', 'POST', account);
+  assert.equal(registered.status, 201);
+  const expected = { id: registered.body.user.id, username: account.username, name: account.name, jobTitle: account.jobTitle };
+  assert.deepEqual(registered.body.user, expected);
+  assert.deepEqual((await request('/api/me')).body.user, expected);
+  assert.equal(store.db.prepare('SELECT job_title FROM users WHERE username = ?').get(account.username).job_title, account.jobTitle);
+  const duplicate = await client()('/api/register', 'POST', { ...account, username: 'MEMBER.ONE', name: '다른 사용자' });
+  assert.equal(duplicate.status, 409);
+  assert.equal((await readdir(backupDir)).length, 1);
+  assert.equal((await request('/api/logout', 'POST', {})).status, 200);
+  assert.equal((await request('/api/login', 'POST', { username: account.name, password: account.password })).status, 401);
+  assert.equal((await request('/api/login', 'POST', { name: account.name, password: account.password })).status, 400);
+  const loggedIn = await request('/api/login', 'POST', { username: 'MEMBER.ONE', password: account.password });
+  assert.equal(loggedIn.status, 200);
+  assert.deepEqual(loggedIn.body.user, expected);
+});
+
+test('가입 시 아이디·직급의 누락, 잘못된 형식과 길이를 거절', async t => {
+  const { client, store } = await setup(t);
+  const request = client();
+  for (const patch of [
+    { username: undefined }, { username: 123 }, { username: '' }, { username: 'user name' }, { username: 'user\u200b' }, { username: 'u'.repeat(41) },
+    { jobTitle: undefined }, { jobTitle: 123 }, { jobTitle: '' }, { jobTitle: ' \t ' }, { jobTitle: '대\n리' }, { jobTitle: '직'.repeat(41) },
+  ]) {
+    assert.equal((await request('/api/register', 'POST', { ...credentials, ...patch })).status, 400);
+  }
+  assert.equal(store.db.prepare('SELECT count(*) AS count FROM users').get().count, 0);
+});
+
+test('계정이 없는 기존 DB에 아이디·직급 항목 추가, 서버 목록과 이력 보존', async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'devsites-schema-'));
+  const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [sample] };
+  const previous = createApp(config);
+  const beforeSites = previous.store.list();
+  const beforeHistory = previous.store.history(beforeSites[0].id);
+  await previous.store.close();
+  const legacy = new DatabaseSync(join(config.dataDir, 'sites.sqlite'));
+  legacy.exec(`
+    DROP TABLE users;
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+  `);
+  legacy.close();
+  const { store, client } = await setup(t, config);
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  assert.deepEqual(store.list(), beforeSites);
+  assert.deepEqual(store.history(beforeSites[0].id), beforeHistory);
+  const request = client();
+  assert.equal((await request('/api/register', 'POST', credentials)).status, 201);
+  assert.equal((await request('/api/me')).body.user.jobTitle, credentials.jobTitle);
 });
 
 test('동시 수정은 하나만 성공하고 이전 값과 이력의 원자성을 유지', async t => {
@@ -158,7 +216,7 @@ test('재시작 후 사용자·목록·이력 유지, 초기 데이터는 한 �
   await mkdir(config.dataDir);
   let app = createApp(config);
   assert.equal(app.store.list().length, 1);
-  const user = await app.store.createUser('지속성 확인', 'not-used-for-login');
+  const user = await app.store.createUser({ username: 'restart-user', name: '지속성 확인', jobTitle: '과장' }, 'not-used-for-login');
   await app.store.mutate('delete', 1, { version: 1 }, user);
   await app.store.close();
   app = createApp(config);
@@ -166,5 +224,5 @@ test('재시작 후 사용자·목록·이력 유지, 초기 데이터는 한 �
   assert.equal(app.store.list().length, 1);
   assert.ok(app.store.list()[0].deletedAt);
   assert.equal(app.store.history(1).length, 2);
-  assert.equal(app.store.db.prepare('SELECT name FROM users').get().name, '지속성 확인');
+  assert.deepEqual({ ...app.store.db.prepare('SELECT username, name, job_title AS jobTitle FROM users').get() }, { username: 'restart-user', name: '지속성 확인', jobTitle: '과장' });
 });

@@ -27,7 +27,7 @@ async function setup(t, options = {}) {
   return { ...app, folder, dataDir, backupDir, base, client };
 }
 
-const sample = { sortOrder: 1, systemName: '검증 서버', url: 'https://example.internal', commonAccount: 'tester / sample-password', ip: '192.168.1.20', servicePort: '8080, 443', sshPort: '22', serverAccount: 'dev', externalAccess: 'no', notes: '최초 값' };
+const sample = { systemName: '검증 서버', url: 'https://example.internal', commonAccount: 'tester / sample-password', ip: '192.168.1.20', servicePort: '8080, 443', sshPort: '22', serverAccount: 'dev', externalAccess: 'no', notes: '최초 값' };
 const credentials = { username: 'test-user', name: '검증 사용자', jobTitle: '대리', password: 'OnlyTestPassword123!' };
 
 test('로그인, 두 사용자 변경 이력, 실제 변경 전 백업, 삭제 보관, 세션 종료', async t => {
@@ -195,7 +195,7 @@ test('입력 검증, 출처 검증, DB와 백업 비공개, 기록의 사용자 
   assert.equal((await request('/api/register', 'POST', credentials, { Origin: 'https://other.example' })).status, 403);
   assert.equal((await request('/api/register', 'POST', credentials, { 'X-Requested-With': '' })).status, 403);
   assert.equal((await request('/api/register', 'POST', credentials)).status, 201);
-  for (const patch of [{ url: 'javascript:alert(1)' }, { ip: '999.1.1.1' }, { sshPort: '65536' }, { systemName: '' }, { sortOrder: 0 }, { externalAccess: 'maybe' }, { commonAccount: {} }, { url: 'https://name:password@example.com' }]) {
+  for (const patch of [{ url: 'javascript:alert(1)' }, { ip: '999.1.1.1' }, { sshPort: '65536' }, { systemName: '' }, { externalAccess: 'maybe' }, { commonAccount: {} }, { url: 'https://name:password@example.com' }]) {
     assert.equal((await request('/api/sites', 'POST', { ...sample, ...patch })).status, 400);
   }
   const result = await request('/api/sites', 'POST', { ...sample, actor: '위조된 이름', updatedBy: '위조된 이름' });
@@ -238,7 +238,7 @@ test('완전 삭제: 삭제된 항목만 허용, 버전·로그인·출처 검�
   const request = client();
   await request('/api/register', 'POST', credentials);
   const { body: { site } } = await request('/api/sites', 'POST', sample);
-  const { body: { site: untouched } } = await request('/api/sites', 'POST', { ...sample, sortOrder: 2, systemName: '보존할 서버' });
+  const { body: { site: untouched } } = await request('/api/sites', 'POST', { ...sample, systemName: '보존할 서버' });
   const path = `/api/sites/${site.id}/permanent`;
   assert.equal((await request(path, 'DELETE', { version: site.version })).status, 409);
   assert.equal((await request(`/api/sites/${site.id}`, 'DELETE', { version: site.version })).status, 200);
@@ -463,4 +463,62 @@ test('기존 기록의 사용자 ID로 현재 직급을 조회하고 원본 데�
   store.db.prepare("UPDATE users SET job_title = '' WHERE id = ?").run(user.id);
   assert.equal(store.find(id).updatedByJobTitle, '');
   assert.equal(store.history(id)[0].actorJobTitle, '');
+});
+
+test('순서 없이 등록·수정·삭제하고 요청의 순서 값은 DB와 새 이력에 저장하지 않음', async t => {
+  const { client, store } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const created = await request('/api/sites', 'POST', sample);
+  assert.equal(created.status, 201);
+  assert.equal(Object.hasOwn(created.body.site, 'sortOrder'), false);
+  const second = await request('/api/sites', 'POST', { ...sample, systemName: '두 번째 서버', sortOrder: 999 });
+  assert.equal(second.status, 201);
+  const updated = await request(`/api/sites/${created.body.site.id}`, 'PUT', { ...sample, notes: '순서 없는 수정', version: 1 });
+  assert.equal(updated.status, 200);
+  const ignored = await request(`/api/sites/${second.body.site.id}`, 'PUT', { ...second.body.site, sortOrder: 1 });
+  assert.equal(ignored.status, 200);
+  assert.equal(ignored.body.changed, false);
+  assert.equal(ignored.body.site.version, 1);
+  assert.equal((await request(`/api/sites/${created.body.site.id}`, 'DELETE', { version: updated.body.site.version })).status, 200);
+  const sites = (await request('/api/sites')).body.sites;
+  assert.deepEqual(sites.map(site => site.id), [created.body.site.id, second.body.site.id]);
+  for (const site of sites) {
+    assert.equal(Object.hasOwn(site, 'sortOrder'), false);
+    assert.equal(Object.hasOwn(JSON.parse(store.db.prepare('SELECT data FROM sites WHERE id = ?').get(site.id).data), 'sortOrder'), false);
+    for (const event of store.history(site.id)) {
+      assert.equal(Object.hasOwn(event.after, 'sortOrder'), false);
+      if (event.before) assert.equal(Object.hasOwn(event.before, 'sortOrder'), false);
+    }
+  }
+});
+
+test('순서가 있는 기존 DB는 재시작 후 등록 순서로 조회하고 원본·과거 이력을 보존', async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'devsites-numbering-restart-'));
+  const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [{ ...sample, sortOrder: 99 }, { ...sample, sortOrder: 1, systemName: '두 번째 서버' }] };
+  let app = createApp(config);
+  t.after(async () => { await app.store.close(); await rm(folder, { recursive: true, force: true }); });
+  for (const { data } of app.store.db.prepare('SELECT data FROM sites').all()) assert.equal(Object.hasOwn(JSON.parse(data), 'sortOrder'), false);
+  app.store.db.exec("UPDATE sites SET data = json_set(data, '$.sortOrder', CASE id WHEN 1 THEN 99 ELSE 1 END); UPDATE history SET after_data = json_set(after_data, '$.sortOrder', CASE site_id WHEN 1 THEN 99 ELSE 1 END)");
+  const originalSites = app.store.db.prepare('SELECT * FROM sites ORDER BY id').all();
+  const originalHistory = app.store.history(1);
+  await app.store.close();
+  app = createApp(config);
+  assert.deepEqual(app.store.list().map(site => site.id), [1, 2]);
+  assert.equal(Object.hasOwn(app.store.find(1), 'sortOrder'), false);
+  assert.deepEqual(app.store.db.prepare('SELECT * FROM sites ORDER BY id').all(), originalSites);
+  assert.deepEqual(app.store.history(1), originalHistory);
+  const actor = { id: null, name: '검증' };
+  const noChange = await app.store.mutate('update', 1, { ...sample, sortOrder: 2, version: 1 }, actor);
+  assert.equal(noChange.changed, false);
+  assert.deepEqual(await readdir(config.backupDir), []);
+  await app.store.mutate('update', 1, { ...sample, notes: '기존 서버 수정', version: 1 }, actor);
+  assert.equal(Object.hasOwn(JSON.parse(app.store.db.prepare('SELECT data FROM sites WHERE id = 1').get().data), 'sortOrder'), false);
+  const [event, past] = app.store.history(1);
+  assert.equal(Object.hasOwn(event.before, 'sortOrder'), false);
+  assert.equal(Object.hasOwn(event.after, 'sortOrder'), false);
+  assert.deepEqual(past, originalHistory[0]);
+  const snapshot = new DatabaseSync(join(config.backupDir, event.backupFile), { readOnly: true });
+  try { assert.equal(JSON.parse(snapshot.prepare('SELECT data FROM sites WHERE id = 1').get().data).sortOrder, 99); }
+  finally { snapshot.close(); }
 });

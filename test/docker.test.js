@@ -101,7 +101,7 @@ test('Docker 배치 경로로 기동: 로그인, DB·백업·로그 생성, 정�
   const cookie = signup.headers.get('set-cookie').split(';')[0];
   const created = await fetch(`${runtime.base}/api/sites`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dev-site-list', Origin: runtime.base, Cookie: cookie },
-    body: JSON.stringify({ sortOrder: 3, systemName: '재시작 검증 서버', url: 'https://test.example.com' }),
+    body: JSON.stringify({ systemName: '재시작 검증 서버', url: 'https://test.example.com' }),
   });
   assert.equal(created.status, 201);
   assert.ok((await stat(join(target, 'sqlite/sites.sqlite'))).size > 0);

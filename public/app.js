@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const labels = { sortOrder: '순서', systemName: '시스템명', url: 'URL', commonAccount: '공통계정', ip: 'IP', servicePort: '서비스포트', sshPort: 'SSH포트', serverAccount: '서버계정', externalAccess: '외부접근가능여부', notes: '비고', groupId: '그룹', deleted: '삭제 상태' };
+const labels = { systemName: '시스템명', url: 'URL', commonAccount: '공통계정', ip: 'IP', servicePort: '서비스포트', sshPort: 'SSH포트', serverAccount: '서버계정', externalAccess: '외부접근가능여부', notes: '비고', groupId: '그룹', deleted: '삭제 상태' };
 const accessLabels = { yes: '가능', no: '불가', unknown: '미확인' };
 let sites = [];
 let groups = [];
@@ -71,7 +71,7 @@ function secretCell(site, field) {
 function row(site, depth = 0) {
   const value = key => site[key] ? escapeHtml(site[key]) : '<span class="dash">—</span>';
   const url = site.url ? new URL(site.url) : null;
-  return `<tr><td>${site.sortOrder.toString().padStart(2, '0')}</td><td class="system-name">${depth ? `<span class="tree-indent" aria-hidden="true">${'　'.repeat(depth - 1)}└ </span>` : ''}${escapeHtml(site.systemName)}<span class="row-meta">${site.deletedAt ? `${escapeHtml(groupPath(site.groupId))} · 삭제 ` : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>`;
+  return `<tr><td class="row-number"></td><td class="system-name">${depth ? `<span class="tree-indent" aria-hidden="true">${'　'.repeat(depth - 1)}└ </span>` : ''}${escapeHtml(site.systemName)}<span class="row-meta">${site.deletedAt ? `${escapeHtml(groupPath(site.groupId))} · 삭제 ` : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>`;
 }
 function render() {
   const active = sites.filter(site => !site.deletedAt);
@@ -82,6 +82,9 @@ function render() {
   $('deleted-count').textContent = deleted.length; $('deleted-summary-count').textContent = deleted.length; $('result-count').textContent = `${shown.length} / ${active.length}`;
   renderTree(shown, active.length);
   $('deleted-rows').innerHTML = removed.length ? removed.map(site => row(site)).join('') : `<tr><td colspan="11" class="empty-cell">${deleted.length ? '검색 조건에 맞는 삭제된 시스템이 없습니다.' : '삭제된 시스템이 없습니다.'}</td></tr>`;
+  for (const id of ['active-rows', 'deleted-rows']) {
+    $(id).querySelectorAll('.row-number').forEach((cell, index) => { cell.textContent = String(index + 1).padStart(2, '0'); });
+  }
 }
 function groupPath(id) {
   const names = [];
@@ -132,7 +135,7 @@ function editGroup(group = null) {
 function openEditor(site = null) {
   editing = site; $('site-form').reset(); errorAt('editor-error');
   $('editor-title').textContent = site ? '시스템 수정' : '시스템 추가';
-  const data = site ?? { sortOrder: Math.min(999999, Math.max(0, ...sites.filter(item => !item.deletedAt).map(item => item.sortOrder)) + 1), externalAccess: 'unknown' };
+  const data = site ?? { externalAccess: 'unknown' };
   $('groupId').innerHTML = groupOptions('미분류');
   for (const field of Object.keys(labels).filter(field => field !== 'deleted')) $(field).value = data[field] ?? '';
   $('editor').showModal(); $('systemName').focus();
@@ -254,7 +257,7 @@ for (const id of ['active-rows', 'deleted-rows']) $(id).addEventListener('click'
 $('site-form').addEventListener('submit', async event => {
   event.preventDefault(); errorAt('editor-error'); $('save-site').disabled = true;
   const item = editing;
-  const data = Object.fromEntries(new FormData(event.target)); data.sortOrder = Number(data.sortOrder); data.groupId = data.groupId ? Number(data.groupId) : null; if (item) data.version = item.version;
+  const data = Object.fromEntries(new FormData(event.target)); data.groupId = data.groupId ? Number(data.groupId) : null; if (item) data.version = item.version;
   try {
     const result = await api(item ? `/api/sites/${item.id}` : '/api/sites', { method: item ? 'PUT' : 'POST', body: data });
     $('editor').close(); toast(result.changed ? '백업과 변경 기록을 저장했습니다.' : '변경된 내용이 없습니다.'); await loadSites();

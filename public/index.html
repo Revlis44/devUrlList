@@ -25,7 +25,7 @@
       <div class="auth-tabs" role="group" aria-label="접속 방식"><button type="button" id="login-tab" class="selected" aria-pressed="true">로그인</button><button type="button" id="register-tab" aria-pressed="false">계정 만들기</button></div>
       <form id="auth-form">
         <label for="auth-name">이름</label><input id="auth-name" name="name" placeholder="이름을 입력하세요" autocomplete="username" minlength="2" maxlength="40" required>
-        <label for="auth-password">비밀번호</label><input id="auth-password" name="password" type="password" placeholder="8자 이상 입력하세요" autocomplete="current-password" minlength="8" maxlength="128" required>
+        <label for="auth-password">비밀번호</label><input id="auth-password" name="password" type="password" placeholder="비밀번호를 입력하세요" autocomplete="current-password" maxlength="128" required>
         <div id="password-confirm-wrap" hidden><label for="auth-confirm">비밀번호 확인</label><input id="auth-confirm" type="password" placeholder="비밀번호를 한 번 더 입력하세요" autocomplete="new-password" maxlength="128"></div>
         <p id="auth-error" class="error" role="alert" hidden></p>
         <button id="auth-submit" class="button primary auth-submit" type="submit">로그인 <span aria-hidden="true">→</span></button>

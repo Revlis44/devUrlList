@@ -110,8 +110,8 @@ export function createApp(options = {}) {
         const body = await readJson(req);
         const name = typeof body.name === 'string' ? body.name.normalize('NFKC').trim() : '';
         const password = body.password;
-        if (name.length < 2 || name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(name) || typeof password !== 'string' || password.length < 8 || password.length > 128 || !password.trim()) {
-          throw new HttpError(400, '이름은 2~40자, 비밀번호는 8~128자로 입력해 주세요.');
+        if (name.length < 2 || name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(name) || typeof password !== 'string' || password.length > 128 || !password.trim()) {
+          throw new HttpError(400, '이름은 2~40자, 비밀번호는 공백만 사용하지 않고 1~128자로 입력해 주세요.');
         }
         let user;
         if (pathname === '/api/register') {

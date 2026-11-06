@@ -80,6 +80,19 @@ test('로그인, 두 사용자 변경 이력, 실제 변경 전 백업, 삭제 �
   assert.equal((await first('/api/login', 'POST', credentials)).status, 200);
 });
 
+test('짧은 비밀번호와 최대 길이 비밀번호로 가입, 로그아웃 후 재로그인', async t => {
+  const { client } = await setup(t);
+  for (const length of [1, 3, 7, 128]) {
+    const request = client();
+    const account = { name: `길이 ${length} 검증`, password: '1'.repeat(length) };
+    assert.equal((await request('/api/register', 'POST', account)).status, 201);
+    assert.equal((await request('/api/logout', 'POST', {})).status, 200);
+    assert.equal((await request('/api/login', 'POST', { ...account, password: '2' })).status, 401);
+    assert.equal((await request('/api/login', 'POST', account)).status, 200);
+    assert.equal((await request('/api/me')).body.user.name, account.name);
+  }
+});
+
 test('동시 수정은 하나만 성공하고 이전 값과 이력의 원자성을 유지', async t => {
   const { client, backupDir } = await setup(t);
   const request = client();
@@ -110,7 +123,11 @@ test('백업 실패 시 목록과 이력이 모두 바뀌지 않음', async t =>
 test('입력 검증, 출처 검증, DB와 백업 비공개, 기록의 사용자 위조 차단', async t => {
   const { client, base } = await setup(t);
   const request = client();
-  assert.equal((await request('/api/register', 'POST', { ...credentials, password: '123' })).status, 400);
+  for (const path of ['/api/register', '/api/login']) {
+    for (const password of [undefined, null, 123, {}, '', ' \t ', '1'.repeat(129)]) {
+      assert.equal((await request(path, 'POST', { ...credentials, password })).status, 400);
+    }
+  }
   assert.equal((await request('/api/register', 'POST', credentials, { Origin: 'https://other.example' })).status, 403);
   assert.equal((await request('/api/register', 'POST', credentials, { 'X-Requested-With': '' })).status, 403);
   assert.equal((await request('/api/register', 'POST', credentials)).status, 201);

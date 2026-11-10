@@ -522,3 +522,99 @@ test('순서가 있는 기존 DB는 재시작 후 등록 순서로 조회하고 
   try { assert.equal(JSON.parse(snapshot.prepare('SELECT data FROM sites WHERE id = 1').get().data).sortOrder, 99); }
   finally { snapshot.close(); }
 });
+
+test('하위 정보: 네 가지 구분·직접 입력·개별 상속 저장, 무변경과 기존 요청의 하위 정보 보존', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const components = [
+    { type: 'WAS', name: 'Tomcat', useSystemIp: true, useSystemSshPort: true, ip: sample.ip, sshPort: sample.sshPort, servicePort: '8080', commonAccount: 'was / test' },
+    { type: 'WEB', name: 'Nginx', useSystemIp: true, sshPort: '2222', servicePort: '80,443' },
+    { type: 'DB', name: 'PostgreSQL', ip: '192.0.2.30', useSystemSshPort: true, servicePort: '5432', serverAccount: 'db / test' },
+    { type: 'OTHER', name: 'Redis', ip: '2001:db8::1', sshPort: '2223', servicePort: '6379', notes: '기타 정보' },
+  ];
+  const created = await request('/api/sites', 'POST', { ...sample, components });
+  assert.equal(created.status, 201);
+  const site = created.body.site;
+  assert.deepEqual(site.components.map(item => item.type), ['WAS', 'WEB', 'DB', 'OTHER']);
+  assert.equal(site.components[0].ip, ''); assert.equal(site.components[0].sshPort, '');
+  assert.equal(site.components[1].servicePort, '80, 443'); assert.equal(site.components[1].sshPort, '2222');
+  assert.equal(site.components[2].ip, '192.0.2.30'); assert.equal(site.components[2].sshPort, '');
+  assert.equal(site.components[3].ip, '2001:db8::1'); assert.equal(site.components[3].sshPort, '2223');
+  const before = await readdir(backupDir);
+  const unchanged = await request(`/api/sites/${site.id}`, 'PUT', { ...site });
+  assert.equal(unchanged.status, 200); assert.equal(unchanged.body.changed, false);
+  assert.deepEqual(await readdir(backupDir), before); assert.equal(store.history(site.id).length, 1);
+  const updated = await request(`/api/sites/${site.id}`, 'PUT', { ...sample, ip: '192.0.2.99', sshPort: '2200', version: site.version });
+  assert.equal(updated.status, 200); assert.deepEqual(updated.body.site.components, site.components);
+  assert.equal(updated.body.site.ip, '192.0.2.99'); assert.equal(updated.body.site.sshPort, '2200');
+  const history = store.history(site.id)[0];
+  assert.equal(history.before.ip, sample.ip); assert.equal(history.after.ip, '192.0.2.99');
+  assert.deepEqual(history.after.components, site.components);
+  assert.deepEqual((await request('/api/sites')).body.sites[0].components, site.components);
+});
+
+test('하위 정보: 입력 검증 실패 시 원본·이력·백업 보존', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { site } } = await request('/api/sites', 'POST', sample);
+  const before = await readdir(backupDir);
+  const invalid = [null, {}, 'WAS', [null], [[]], [{ type: 'INVALID', name: '이름' }], [{ type: 'WAS' }], [{ type: 'DB', name: ' ' }], [{ type: 'WEB', name: 123 }], [{ type: 'WAS', name: 'a'.repeat(101) }],
+    ...[{ ip: 'invalid' }, { sshPort: '65536' }, { servicePort: '0' }, { url: 'javascript:alert(1)' }, { useSystemIp: 'true' }, { useSystemSshPort: 1 }, { useSystemIp: null }, { externalAccess: 'invalid' }, { notes: {} }].map(input => [{ type: 'WAS', name: '검증', ...input }])];
+  for (const components of invalid) {
+    const result = await request(`/api/sites/${site.id}`, 'PUT', { ...site, components });
+    assert.equal(result.status, 400, JSON.stringify(components));
+  }
+  assert.deepEqual(store.find(site.id), site); assert.equal(store.history(site.id).length, 1);
+  assert.deepEqual(await readdir(backupDir), before);
+});
+
+test('하위 정보: 추가·수정·제거·시스템 삭제의 기록과 백업, 동시 수정 차단', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const { body: { site } } = await request('/api/sites', 'POST', sample);
+  const path = `/api/sites/${site.id}`;
+  const added = await request(path, 'PUT', { ...site, components: [{ type: 'DB', name: '개발 DB', useSystemIp: true, useSystemSshPort: true, commonAccount: 'db / test' }] });
+  assert.equal(added.status, 200);
+  assert.equal((await request(path, 'PUT', { ...site, components: [] })).status, 409);
+  const switched = await request(path, 'PUT', { ...added.body.site, components: [{ ...added.body.site.components[0], useSystemIp: false, ip: '192.0.2.50' }] });
+  assert.equal(switched.status, 200); assert.equal(switched.body.site.components[0].ip, '192.0.2.50');
+  const removed = await request(path, 'PUT', { ...switched.body.site, components: [] });
+  assert.equal(removed.status, 200); assert.deepEqual(removed.body.site.components, []);
+  const removalHistory = store.history(site.id)[0];
+  assert.deepEqual(removalHistory.before.components, switched.body.site.components); assert.deepEqual(removalHistory.after.components, []);
+  const snapshot = new DatabaseSync(join(backupDir, removalHistory.backupFile), { readOnly: true });
+  try { assert.deepEqual(JSON.parse(snapshot.prepare('SELECT data FROM sites WHERE id = ?').get(site.id).data).components, switched.body.site.components); }
+  finally { snapshot.close(); }
+  const restored = await request(path, 'PUT', { ...removed.body.site, components: switched.body.site.components });
+  assert.equal((await request(path, 'DELETE', { version: restored.body.site.version })).status, 200);
+  assert.deepEqual(store.find(site.id).components, switched.body.site.components);
+  assert.deepEqual(store.history(site.id)[0].after.components, switched.body.site.components);
+  assert.equal((await request(path, 'PUT', { ...store.find(site.id), components: [] })).status, 404);
+});
+
+test('하위 정보: 기존 DB·과거 기록 무변경, 재시작 유지, 백업 실패 시 하위 수정 취소', async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'devsites-components-'));
+  const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [sample] };
+  let app = createApp(config);
+  t.after(async () => { await app.store.close(); await rm(folder, { recursive: true, force: true }); });
+  app.store.db.exec("UPDATE sites SET data = json_remove(data, '$.components'); UPDATE history SET after_data = json_remove(after_data, '$.components')");
+  const original = app.store.db.prepare('SELECT * FROM sites').all();
+  const history = app.store.history(1);
+  await app.store.close(); app = createApp(config);
+  assert.deepEqual(app.store.find(1).components, []);
+  assert.deepEqual(app.store.db.prepare('SELECT * FROM sites').all(), original);
+  assert.deepEqual(app.store.history(1), history);
+  const actor = { id: null, name: '검증' };
+  assert.equal((await app.store.mutate('update', 1, { ...sample, version: 1 }, actor)).changed, false);
+  const saved = await app.store.mutate('update', 1, { ...sample, version: 1, components: [{ type: 'OTHER', name: '기타 서비스', useSystemIp: true, useSystemSshPort: true }] }, actor);
+  await app.store.close(); app = createApp(config);
+  assert.deepEqual(app.store.find(1), saved.site);
+  assert.deepEqual(app.store.history(1).at(-1), history[0]);
+  const beforeHistory = app.store.history(1);
+  await rename(config.backupDir, `${config.backupDir}-original`); await writeFile(config.backupDir, '백업 실패 유도');
+  await assert.rejects(app.store.mutate('update', 1, { ...saved.site, components: [] }, actor), error => error.status === 503);
+  assert.deepEqual(app.store.find(1), saved.site); assert.deepEqual(app.store.history(1), beforeHistory);
+});

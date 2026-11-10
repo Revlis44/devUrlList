@@ -1,5 +1,8 @@
 const $ = id => document.getElementById(id);
-const labels = { systemName: '시스템명', url: 'URL', commonAccount: '공통계정', ip: 'IP', servicePort: '서비스포트', sshPort: 'SSH포트', serverAccount: '서버계정', externalAccess: '외부접근가능여부', notes: '비고', groupId: '그룹', deleted: '삭제 상태' };
+const labels = { systemName: '시스템명', url: 'URL', commonAccount: '공통계정', ip: 'IP', servicePort: '서비스포트', sshPort: 'SSH포트', serverAccount: '서버계정', externalAccess: '외부접근가능여부', notes: '비고', groupId: '그룹', components: '하위 정보', deleted: '삭제 상태' };
+const componentTypes = { WAS: 'WAS', WEB: 'WEB', DB: 'DB', OTHER: '기타' };
+const componentFields = ['name', 'url', 'ip', 'externalAccess', 'servicePort', 'sshPort', 'commonAccount', 'serverAccount', 'notes'];
+let componentSequence = 0;
 const accessLabels = { yes: '가능', no: '불가', unknown: '미확인' };
 let sites = [];
 let groups = [];
@@ -35,7 +38,7 @@ async function api(path, { method = 'GET', body } = {}) {
 function showAuth() {
   currentUser = null; sites = []; groups = []; collapsedGroups.clear(); histories = []; revealed.clear(); listRequest++; historyRequest++;
   document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
-  $('group-form').reset(); $('group-list').replaceChildren(); $('site-form').reset(); $('history-content').replaceChildren(); $('active-rows').replaceChildren(); $('deleted-rows').replaceChildren();
+  $('group-form').reset(); $('group-list').replaceChildren(); $('site-form').reset(); $('component-editors').replaceChildren(); $('history-content').replaceChildren(); $('active-rows').replaceChildren(); $('deleted-rows').replaceChildren();
   $('auth-form').reset(); $('app-view').hidden = true; $('auth-view').hidden = false; $('boot').hidden = true;
 }
 async function showApp(user) {
@@ -60,18 +63,27 @@ async function loadSites() {
 function matches(site) {
   const query = $('search').value.trim().toLocaleLowerCase();
   const filter = $('access-filter').value;
-  return (filter === 'all' || site.externalAccess === filter) && (!query || [site.systemName, site.url, site.ip, site.notes, groupPath(site.groupId)].some(value => value.toLocaleLowerCase().includes(query)));
+  const values = [site.systemName, site.url, site.ip, site.notes, groupPath(site.groupId), ...(site.components ?? []).flatMap(component => [componentTypes[component.type], component.name, component.url, component.useSystemIp ? site.ip : component.ip, component.notes])];
+  return (filter === 'all' || site.externalAccess === filter) && (!query || values.some(value => value.toLocaleLowerCase().includes(query)));
 }
-function secretCell(site, field) {
-  if (!site[field]) return '<span class="dash">—</span>';
-  const key = `${site.id}:${field}`;
+function secretCell(site, field, componentIndex = null) {
+  const item = componentIndex === null ? site : site.components[componentIndex];
+  if (!item[field]) return '<span class="dash">—</span>';
+  const key = `${site.id}:${componentIndex ?? 'system'}:${field}`;
   const open = revealed.has(key);
-  return `${open ? `<span class="secret-value">${escapeHtml(site[field])}</span>` : ''}<button class="secret-button" data-action="secret" data-id="${site.id}" data-field="${field}" aria-label="${escapeHtml(site.systemName)} ${labels[field]} ${open ? '숨기기' : '보기'}" aria-pressed="${open}">${open ? '숨기기' : '•••••• 보기'}</button>`;
+  return `${open ? `<span class="secret-value">${escapeHtml(item[field])}</span>` : ''}<button class="secret-button" data-action="secret" data-id="${site.id}" ${componentIndex === null ? '' : `data-component="${componentIndex}"`} data-field="${field}" aria-label="${escapeHtml(item.name ?? site.systemName)} ${labels[field]} ${open ? '숨기기' : '보기'}" aria-pressed="${open}">${open ? '숨기기' : '•••••• 보기'}</button>`;
+}
+function componentRows(site, depth) {
+  return (site.components ?? []).map((component, index) => {
+    const value = key => escapeHtml(component[key]) || '<span class="dash">—</span>';
+    const inherited = (key, same) => same ? `${escapeHtml(site[key]) || '미등록'}<span class="inherited-label">시스템과 동일</span>` : value(key);
+    return `<tr class="component-row"><td></td><td class="system-name"><span class="tree-indent" aria-hidden="true">${'　'.repeat(depth)}└ </span><span class="component-type">${componentTypes[component.type]}</span>${value('name')}</td><td>${component.url ? `<a class="url-link" href="${escapeHtml(component.url)}" target="_blank" rel="noopener noreferrer">${value('url')} ↗</a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount', index)}</td><td class="mono">${inherited('ip', component.useSystemIp)}</td><td class="mono">${value('servicePort')}</td><td class="mono">${inherited('sshPort', component.useSystemSshPort)}</td><td>${secretCell(site, 'serverAccount', index)}</td><td><span class="badge ${component.externalAccess}">${accessLabels[component.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td>${site.deletedAt ? '' : `<div class="row-actions"><button data-action="edit-component" data-id="${site.id}" data-component="${index}">하위 정보 수정</button></div>`}</td></tr>`;
+  }).join('');
 }
 function row(site, depth = 0) {
   const value = key => site[key] ? escapeHtml(site[key]) : '<span class="dash">—</span>';
   const url = site.url ? new URL(site.url) : null;
-  return `<tr><td class="row-number"></td><td class="system-name">${depth ? `<span class="tree-indent" aria-hidden="true">${'　'.repeat(depth - 1)}└ </span>` : ''}${escapeHtml(site.systemName)}<span class="row-meta">${site.deletedAt ? `${escapeHtml(groupPath(site.groupId))} · 삭제 ` : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>`;
+  return `<tr><td class="row-number"></td><td class="system-name">${depth ? `<span class="tree-indent" aria-hidden="true">${'　'.repeat(depth - 1)}└ </span>` : ''}${escapeHtml(site.systemName)}${site.deletedAt ? '' : `<button class="component-link" data-action="components" data-id="${site.id}">하위 정보 ${site.components?.length ?? 0}개 ＋</button>`}<span class="row-meta">${site.deletedAt ? `${escapeHtml(groupPath(site.groupId))} · 삭제 ` : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>${componentRows(site, depth)}`;
 }
 function render() {
   const active = sites.filter(site => !site.deletedAt);
@@ -137,8 +149,45 @@ function openEditor(site = null) {
   $('editor-title').textContent = site ? '시스템 수정' : '시스템 추가';
   const data = site ?? { externalAccess: 'unknown' };
   $('groupId').innerHTML = groupOptions('미분류');
-  for (const field of Object.keys(labels).filter(field => field !== 'deleted')) $(field).value = data[field] ?? '';
+  for (const field of Object.keys(labels).filter(field => !['deleted', 'components'].includes(field))) $(field).value = data[field] ?? '';
+  $('component-editors').replaceChildren();
+  for (const component of data.components ?? []) addComponentEditor(component);
+  $('components-empty').hidden = Boolean(data.components?.length);
   $('editor').showModal(); $('systemName').focus();
+}
+function addComponentEditor(component = null) {
+  const item = component ?? { type: 'WAS', externalAccess: 'unknown', useSystemIp: true, useSystemSshPort: true };
+  const id = `component-${++componentSequence}`;
+  const card = document.createElement('details'); card.className = 'component-editor'; card.open = !component;
+  card.innerHTML = `<summary><span class="component-summary"></span></summary><div class="form-grid"><div><label for="${id}-type">구분</label><select id="${id}-type" data-field="type">${Object.entries(componentTypes).map(([type, label]) => `<option value="${type}">${label}</option>`).join('')}</select></div>${componentFields.map(field => {
+    const label = field === 'name' ? '항목명' : labels[field];
+    const max = field === 'name' ? 100 : field === 'notes' ? 4000 : field === 'ip' ? 45 : 2000;
+    const input = ['commonAccount', 'serverAccount', 'notes'].includes(field) ? `<textarea id="${id}-${field}" data-field="${field}" rows="2" maxlength="${max}" spellcheck="false"></textarea>` : field === 'externalAccess' ? `<select id="${id}-${field}" data-field="${field}">${Object.entries(accessLabels).map(([value, text]) => `<option value="${value}">${text}</option>`).join('')}</select>` : `<input id="${id}-${field}" data-field="${field}" type="${field === 'url' ? 'url' : 'text'}" maxlength="${max}" ${field === 'name' ? 'required placeholder="예: Tomcat, Nginx, PostgreSQL"' : ''}>`;
+    const same = field === 'ip' ? 'useSystemIp' : field === 'sshPort' ? 'useSystemSshPort' : null;
+    return `<div class="${['url', 'notes'].includes(field) ? 'full' : ''}"><label for="${id}-${field}">${label}${field === 'name' ? ' <span class="required">*</span>' : ''}</label>${input}${same ? `<label class="inherit-option"><input type="checkbox" data-field="${same}" aria-label="${label}: 시스템과 동일"> 시스템과 동일</label>` : ''}</div>`;
+  }).join('')}</div><button type="button" class="text-button remove-component">하위 항목 삭제</button>`;
+  for (const control of card.querySelectorAll('[data-field]')) {
+    if (control.type === 'checkbox') control.checked = item[control.dataset.field] ?? false;
+    else control.value = item[control.dataset.field] ?? '';
+  }
+  $('component-editors').append(card); $('components-empty').hidden = true;
+  syncComponentEditor(card);
+  return card;
+}
+function syncComponentEditor(card) {
+  const control = field => card.querySelector(`[data-field="${field}"]`);
+  card.querySelector('.component-summary').textContent = `${componentTypes[control('type').value]} · ${control('name').value || '새 하위 항목'}`;
+  for (const [field, same] of [['ip', 'useSystemIp'], ['sshPort', 'useSystemSshPort']]) {
+    const input = control(field); const checked = control(same).checked;
+    if (checked && !input.disabled) input.dataset.manualValue = input.value;
+    if (checked) input.value = $(field).value;
+    else if (input.disabled) input.value = input.dataset.manualValue ?? '';
+    input.disabled = checked;
+    input.placeholder = checked ? '시스템에 미등록' : '';
+  }
+}
+function readComponents() {
+  return [...$('component-editors').children].map(card => Object.fromEntries([...card.querySelectorAll('[data-field]')].map(control => [control.dataset.field, control.type === 'checkbox' ? control.checked : control.disabled ? '' : control.value])));
 }
 async function openHistory(site) {
   const request = ++historyRequest;
@@ -150,6 +199,14 @@ async function openHistory(site) {
   } catch (error) { if (request === historyRequest) $('history-content').textContent = error.message; }
 }
 function historyValue(field, value, reveal, snapshot) {
+  if (field === 'components') return (value ?? []).map(component => {
+    const details = componentFields.filter(key => key !== 'name').map(key => {
+      const same = key === 'ip' && component.useSystemIp || key === 'sshPort' && component.useSystemSshPort;
+      if (!same && !component[key]) return '';
+      return `${labels[key]}: ${same ? `시스템과 동일 (${escapeHtml(snapshot?.[key]) || '미등록'})` : historyValue(key, component[key], reveal, snapshot)}`;
+    }).filter(Boolean).join('\n');
+    return `${componentTypes[component.type]} · ${escapeHtml(component.name)}\n${details}`;
+  }).join('\n\n') || '—';
   if (field === 'groupId') return escapeHtml(snapshot?.groupName ?? groupPath(value));
   if (value === null || value === undefined || value === '') return '—';
   if (field === 'deleted') return value ? '삭제됨' : '사용 중';
@@ -159,10 +216,10 @@ function historyValue(field, value, reveal, snapshot) {
 }
 function renderHistory(reveal = false) {
   $('history-content').innerHTML = histories.map(event => {
-    const changes = Object.keys(labels).filter(field => event.before ? (event.before[field] ?? null) !== (event.after[field] ?? null) : event.after[field] != null && event.after[field] !== '' && field !== 'deleted');
+    const changes = Object.keys(labels).filter(field => field === 'components' ? JSON.stringify(event.before?.components ?? []) !== JSON.stringify(event.after.components ?? []) : event.before ? (event.before[field] ?? null) !== (event.after[field] ?? null) : event.after[field] != null && event.after[field] !== '' && field !== 'deleted');
     return `<article class="history-item"><div class="history-head"><span class="action-badge ${event.action}">${({ create: '추가', update: '수정', delete: '삭제' })[event.action]}</span><strong>${escapeHtml(formatActor(event.actor, event.actorJobTitle))}</strong><time datetime="${event.changedAt}">${formatDate(event.changedAt)}</time></div><div class="change-list">${changes.map(field => `<div class="change-row"><span class="change-label">${labels[field]}</span><span class="change-value change-before">${historyValue(field, event.before?.[field], reveal, event.before)}</span><span class="change-arrow" aria-label="변경 후">→</span><span class="change-value change-after">${historyValue(field, event.after[field], reveal, event.after)}</span></div>`).join('')}</div><div class="backup-caption">${event.backupFile ? '변경 전 백업 완료' : '최초 데이터 등록'}</div></article>`;
   }).join('') || '<p class="muted">변경 기록이 없습니다.</p>';
-  if (histories.some(event => event.after.commonAccount || event.after.serverAccount || event.before?.commonAccount || event.before?.serverAccount)) {
+  if (histories.some(event => [event.before, event.after].some(snapshot => snapshot && [snapshot, ...(snapshot.components ?? [])].some(item => item.commonAccount || item.serverAccount)))) {
     const button = document.createElement('button'); button.className = 'button secondary history-secret'; button.textContent = reveal ? '기록의 계정 정보 숨기기' : '기록의 계정 정보 보기'; button.setAttribute('aria-pressed', String(reveal)); button.addEventListener('click', () => renderHistory(!reveal)); $('history-content').append(button);
   }
 }
@@ -233,13 +290,25 @@ $('auth-form').addEventListener('submit', async event => {
 $('logout').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST', body: {} }); showAuth(); setAuthMode(false); } catch (error) { toast(error.message); } });
 $('search').addEventListener('input', render); $('access-filter').addEventListener('change', render); $('refresh').addEventListener('click', loadSites); $('add-site').addEventListener('click', () => openEditor());
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
-$('editor').addEventListener('close', () => { $('site-form').reset(); editing = null; });
+$('editor').addEventListener('close', () => { $('site-form').reset(); $('component-editors').replaceChildren(); editing = null; });
+$('add-component').addEventListener('click', () => { addComponentEditor().querySelector('[data-field="name"]').focus(); });
+$('component-editors').addEventListener('input', event => { const card = event.target.closest('.component-editor'); if (card) syncComponentEditor(card); });
+$('component-editors').addEventListener('click', event => {
+  const button = event.target.closest('.remove-component'); if (!button) return;
+  button.closest('.component-editor').remove(); $('components-empty').hidden = Boolean($('component-editors').children.length); $('add-component').focus();
+});
+for (const field of ['ip', 'sshPort']) $(field).addEventListener('input', () => { for (const card of $('component-editors').children) syncComponentEditor(card); });
+$('site-form').addEventListener('invalid', event => { const card = event.target.closest('.component-editor'); if (card) card.open = true; }, true);
 $('delete-dialog').addEventListener('close', () => { deleting = null; });
 $('history-dialog').addEventListener('close', () => { historyRequest++; histories = []; $('history-content').replaceChildren(); });
 for (const id of ['active-rows', 'deleted-rows']) $(id).addEventListener('click', event => {
   const button = event.target.closest('button[data-action]'); if (!button) return;
   const site = sites.find(item => item.id === Number(button.dataset.id)); if (!site) return;
   if (button.dataset.action === 'edit') openEditor(site);
+  if (button.dataset.action === 'components') { openEditor(site); $('add-component').focus(); }
+  if (button.dataset.action === 'edit-component') {
+    openEditor(site); const card = $('component-editors').children[Number(button.dataset.component)]; card.open = true; card.querySelector('[data-field="name"]').focus();
+  }
   if (button.dataset.action === 'history') openHistory(site);
   if (['delete', 'permanent-delete'].includes(button.dataset.action)) {
     deleting = site; errorAt('delete-error'); $('delete-name').textContent = site.systemName;
@@ -249,15 +318,16 @@ for (const id of ['active-rows', 'deleted-rows']) $(id).addEventListener('click'
     $('delete-dialog').showModal(); $('delete-dialog').querySelector('.button[data-close]').focus();
   }
   if (button.dataset.action === 'secret') {
-    const field = button.dataset.field; const key = `${site.id}:${field}`;
+    const field = button.dataset.field; const componentIndex = button.dataset.component === undefined ? null : Number(button.dataset.component); const key = `${site.id}:${componentIndex ?? 'system'}:${field}`;
     revealed.has(key) ? revealed.delete(key) : revealed.add(key);
-    const cell = button.parentElement; cell.innerHTML = secretCell(site, field); cell.querySelector('button').focus();
+    const cell = button.parentElement; cell.innerHTML = secretCell(site, field, componentIndex); cell.querySelector('button').focus();
   }
 });
 $('site-form').addEventListener('submit', async event => {
   event.preventDefault(); errorAt('editor-error'); $('save-site').disabled = true;
   const item = editing;
   const data = Object.fromEntries(new FormData(event.target)); data.groupId = data.groupId ? Number(data.groupId) : null; if (item) data.version = item.version;
+  data.components = readComponents();
   try {
     const result = await api(item ? `/api/sites/${item.id}` : '/api/sites', { method: item ? 'PUT' : 'POST', body: data });
     $('editor').close(); toast(result.changed ? '백업과 변경 기록을 저장했습니다.' : '변경된 내용이 없습니다.'); await loadSites();

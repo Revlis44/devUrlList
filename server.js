@@ -49,6 +49,7 @@ export function createApp(options = {}) {
   const assets = new Map([
     ['/', ['index.html', 'text/html; charset=utf-8']],
     ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
+    ['/theme.js', ['theme.js', 'text/javascript; charset=utf-8']],
     ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
     ['/favicon.png', ['favicon.png', 'image/png']],
     ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],

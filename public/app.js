@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const labels = { systemName: '시스템명', url: 'URL', commonAccount: '공통계정', ip: 'IP', servicePort: '서비스포트', sshPort: 'SSH포트', serverAccount: '서버계정', externalAccess: '외부접근가능여부', notes: '비고', groupId: '그룹', components: '하위 정보', deleted: '삭제 상태' };
-const componentTypes = { WAS: 'WAS', WEB: 'WEB', DB: 'DB', OTHER: '기타' };
+const componentTypes = { WAS: 'WAS', WEB: 'WEB', DB: 'DB', PROXY: 'Reverse Proxy', OTHER: '기타' };
 const componentFields = ['name', 'url', 'ip', 'externalAccess', 'servicePort', 'sshPort', 'commonAccount', 'serverAccount', 'notes'];
 let componentSequence = 0;
 const accessLabels = { yes: '가능', no: '불가', unknown: '미확인' };
@@ -9,6 +9,7 @@ let groups = [];
 let editingGroup = null;
 let deletingGroup = null;
 const collapsedGroups = new Set();
+const collapsedSystems = new Set();
 let currentUser = null;
 let registerMode = false;
 let editing = null;
@@ -21,6 +22,8 @@ const revealed = new Set();
 
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]); }
 function formatActor(name, jobTitle) { return [name, jobTitle].filter(Boolean).join(' '); }
+function componentLabel(type, field) { return type === 'DB' && field === 'commonAccount' ? 'DB계정' : type === 'DB' && field === 'servicePort' ? 'DB포트' : labels[field]; }
+function componentUrl(site, component) { return ['WEB', 'PROXY'].includes(component.type) ? site.url : component.type === 'OTHER' ? component.url : ''; }
 function formatDate(date, short = false) {
   return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: short ? undefined : 'numeric', month: '2-digit', day: '2-digit', hour: short ? undefined : '2-digit', minute: short ? undefined : '2-digit', second: short ? undefined : '2-digit', hour12: false }).format(new Date(date));
 }
@@ -36,7 +39,7 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 function showAuth() {
-  currentUser = null; sites = []; groups = []; collapsedGroups.clear(); histories = []; revealed.clear(); listRequest++; historyRequest++;
+  currentUser = null; sites = []; groups = []; collapsedGroups.clear(); collapsedSystems.clear(); histories = []; revealed.clear(); listRequest++; historyRequest++;
   document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
   $('group-form').reset(); $('group-list').replaceChildren(); $('site-form').reset(); $('component-editors').replaceChildren(); $('history-content').replaceChildren(); $('active-rows').replaceChildren(); $('deleted-rows').replaceChildren();
   $('auth-form').reset(); $('app-view').hidden = true; $('auth-view').hidden = false; $('boot').hidden = true;
@@ -63,27 +66,34 @@ async function loadSites() {
 function matches(site) {
   const query = $('search').value.trim().toLocaleLowerCase();
   const filter = $('access-filter').value;
-  const values = [site.systemName, site.url, site.ip, site.notes, groupPath(site.groupId), ...(site.components ?? []).flatMap(component => [componentTypes[component.type], component.name, component.url, component.useSystemIp ? site.ip : component.ip, component.notes])];
+  const values = [site.systemName, site.url, site.ip, site.notes, groupPath(site.groupId), ...(site.components ?? []).flatMap(component => [componentTypes[component.type], component.name, componentUrl(site, component), component.useSystemIp ? site.ip : component.ip, component.notes])];
   return (filter === 'all' || site.externalAccess === filter) && (!query || values.some(value => value.toLocaleLowerCase().includes(query)));
 }
 function secretCell(site, field, componentIndex = null) {
   const item = componentIndex === null ? site : site.components[componentIndex];
-  if (!item[field]) return '<span class="dash">—</span>';
+  const accountLabel = componentIndex !== null && item.type === 'DB' && field === 'commonAccount' ? '<span class="account-label">DB계정</span>' : '';
+  if (!item[field]) return `${accountLabel}<span class="dash">—</span>`;
   const key = `${site.id}:${componentIndex ?? 'system'}:${field}`;
   const open = revealed.has(key);
-  return `${open ? `<span class="secret-value">${escapeHtml(item[field])}</span>` : ''}<button class="secret-button" data-action="secret" data-id="${site.id}" ${componentIndex === null ? '' : `data-component="${componentIndex}"`} data-field="${field}" aria-label="${escapeHtml(item.name ?? site.systemName)} ${labels[field]} ${open ? '숨기기' : '보기'}" aria-pressed="${open}">${open ? '숨기기' : '•••••• 보기'}</button>`;
+  return `${accountLabel}${open ? `<span class="secret-value">${escapeHtml(item[field])}</span>` : ''}<button class="secret-button" data-action="secret" data-id="${site.id}" ${componentIndex === null ? '' : `data-component="${componentIndex}"`} data-field="${field}" aria-label="${escapeHtml(item.name ?? site.systemName)} ${componentLabel(item.type, field)} ${open ? '숨기기' : '보기'}" aria-pressed="${open}">${open ? '숨기기' : '•••••• 보기'}</button>`;
 }
 function componentRows(site, depth) {
   return (site.components ?? []).map((component, index) => {
     const value = key => escapeHtml(component[key]) || '<span class="dash">—</span>';
     const inherited = (key, same) => same ? `${escapeHtml(site[key]) || '미등록'}<span class="inherited-label">시스템과 동일</span>` : value(key);
-    return `<tr class="component-row"><td></td><td class="system-name"><span class="tree-indent" aria-hidden="true">${'　'.repeat(depth)}└ </span><span class="component-type">${componentTypes[component.type]}</span>${value('name')}</td><td>${component.url ? `<a class="url-link" href="${escapeHtml(component.url)}" target="_blank" rel="noopener noreferrer">${value('url')} ↗</a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount', index)}</td><td class="mono">${inherited('ip', component.useSystemIp)}</td><td class="mono">${value('servicePort')}</td><td class="mono">${inherited('sshPort', component.useSystemSshPort)}</td><td>${secretCell(site, 'serverAccount', index)}</td><td><span class="badge ${component.externalAccess}">${accessLabels[component.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td>${site.deletedAt ? '' : `<div class="row-actions"><button data-action="edit-component" data-id="${site.id}" data-component="${index}">하위 정보 수정</button></div>`}</td></tr>`;
+    const url = componentUrl(site, component);
+    const systemUrl = ['WEB', 'PROXY'].includes(component.type);
+    return `<tr class="component-row"><td></td><td class="system-name"><span class="tree-indent" aria-hidden="true">${'　'.repeat(depth)}└ </span><span class="component-type">${componentTypes[component.type]}</span>${value('name')}</td><td>${url ? `<a class="url-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)} ↗</a>` : '<span class="dash">—</span>'}${systemUrl ? `<span class="inherited-label">${url ? '시스템과 동일' : '시스템 URL 미등록'}</span>` : ''}</td><td>${secretCell(site, 'commonAccount', index)}</td><td class="mono">${inherited('ip', component.useSystemIp)}</td><td class="mono">${value('servicePort')}</td><td class="mono">${inherited('sshPort', component.useSystemSshPort)}</td><td>${secretCell(site, 'serverAccount', index)}</td><td><span class="badge ${component.externalAccess}">${accessLabels[component.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td>${site.deletedAt ? '' : `<div class="row-actions"><button data-action="edit-component" data-id="${site.id}" data-component="${index}">하위 정보 수정</button></div>`}</td></tr>`;
   }).join('');
 }
 function row(site, depth = 0) {
   const value = key => site[key] ? escapeHtml(site[key]) : '<span class="dash">—</span>';
   const url = site.url ? new URL(site.url) : null;
-  return `<tr><td class="row-number"></td><td class="system-name">${depth ? `<span class="tree-indent" aria-hidden="true">${'　'.repeat(depth - 1)}└ </span>` : ''}${escapeHtml(site.systemName)}${site.deletedAt ? '' : `<button class="component-link" data-action="components" data-id="${site.id}">하위 정보 ${site.components?.length ?? 0}개 ＋</button>`}<span class="row-meta">${site.deletedAt ? `${escapeHtml(groupPath(site.groupId))} · 삭제 ` : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>${componentRows(site, depth)}`;
+  const count = site.components?.length ?? 0;
+  const filtering = Boolean($('search').value.trim()) || $('access-filter').value !== 'all';
+  const open = filtering || !collapsedSystems.has(site.id);
+  const controls = `<span class="component-controls">${count ? `<button class="component-toggle" data-action="toggle-components" data-id="${site.id}" aria-label="${escapeHtml(site.systemName)} 하위 정보 ${count}개 ${open ? '접기' : '펼치기'}" aria-expanded="${open}" ${filtering ? 'disabled title="검색·필터 적용 중에는 하위 정보를 자동으로 펼칩니다."' : ''}><span aria-hidden="true">${open ? '▾' : '▸'}</span> 하위 정보 ${count}개</button>` : '<span class="row-meta">하위 정보 없음</span>'}${site.deletedAt ? '' : `<button class="component-link" data-action="components" data-id="${site.id}">추가·수정</button>`}</span>`;
+  return `<tr><td class="row-number"></td><td class="system-name">${depth ? `<span class="tree-indent" aria-hidden="true">${'　'.repeat(depth - 1)}└ </span>` : ''}${escapeHtml(site.systemName)}${controls}<span class="row-meta">${site.deletedAt ? `${escapeHtml(groupPath(site.groupId))} · 삭제 ` : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</span></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>${open ? componentRows(site, depth) : ''}`;
 }
 function render() {
   const active = sites.filter(site => !site.deletedAt);
@@ -159,12 +169,13 @@ function addComponentEditor(component = null) {
   const item = component ?? { type: 'WAS', externalAccess: 'unknown', useSystemIp: true, useSystemSshPort: true };
   const id = `component-${++componentSequence}`;
   const card = document.createElement('details'); card.className = 'component-editor'; card.open = !component;
+  card.dataset.savedUrl = item.url ?? '';
   card.innerHTML = `<summary><span class="component-summary"></span></summary><div class="form-grid"><div><label for="${id}-type">구분</label><select id="${id}-type" data-field="type">${Object.entries(componentTypes).map(([type, label]) => `<option value="${type}">${label}</option>`).join('')}</select></div>${componentFields.map(field => {
     const label = field === 'name' ? '항목명' : labels[field];
     const max = field === 'name' ? 100 : field === 'notes' ? 4000 : field === 'ip' ? 45 : 2000;
     const input = ['commonAccount', 'serverAccount', 'notes'].includes(field) ? `<textarea id="${id}-${field}" data-field="${field}" rows="2" maxlength="${max}" spellcheck="false"></textarea>` : field === 'externalAccess' ? `<select id="${id}-${field}" data-field="${field}">${Object.entries(accessLabels).map(([value, text]) => `<option value="${value}">${text}</option>`).join('')}</select>` : `<input id="${id}-${field}" data-field="${field}" type="${field === 'url' ? 'url' : 'text'}" maxlength="${max}" ${field === 'name' ? 'required placeholder="예: Tomcat, Nginx, PostgreSQL"' : ''}>`;
     const same = field === 'ip' ? 'useSystemIp' : field === 'sshPort' ? 'useSystemSshPort' : null;
-    return `<div class="${['url', 'notes'].includes(field) ? 'full' : ''}"><label for="${id}-${field}">${label}${field === 'name' ? ' <span class="required">*</span>' : ''}</label>${input}${same ? `<label class="inherit-option"><input type="checkbox" data-field="${same}" aria-label="${label}: 시스템과 동일"> 시스템과 동일</label>` : ''}</div>`;
+    return `<div class="${['url', 'notes'].includes(field) ? 'full' : ''}"><label for="${id}-${field}">${label}${field === 'name' ? ' <span class="required">*</span>' : ''}</label>${input}${same ? `<label class="inherit-option"><input type="checkbox" data-field="${same}" aria-label="${label}: 시스템과 동일"> 시스템과 동일</label>` : ''}</div>${field === 'url' ? '<p class="component-url-note full muted" hidden></p>' : ''}`;
   }).join('')}</div><button type="button" class="text-button remove-component">하위 항목 삭제</button>`;
   for (const control of card.querySelectorAll('[data-field]')) {
     if (control.type === 'checkbox') control.checked = item[control.dataset.field] ?? false;
@@ -176,7 +187,16 @@ function addComponentEditor(component = null) {
 }
 function syncComponentEditor(card) {
   const control = field => card.querySelector(`[data-field="${field}"]`);
-  card.querySelector('.component-summary').textContent = `${componentTypes[control('type').value]} · ${control('name').value || '새 하위 항목'}`;
+  const type = control('type').value;
+  card.querySelector('.component-summary').textContent = `${componentTypes[type]} · ${control('name').value || '새 하위 항목'}`;
+  control('name').placeholder = ({ WAS: '예: Tomcat, WildFly', WEB: '예: Nginx, Apache', DB: '예: PostgreSQL, MySQL', PROXY: '예: Traefik, HAProxy', OTHER: '예: Redis, 관리 도구' })[type];
+  control('url').closest('div').hidden = type !== 'OTHER';
+  control('url').disabled = type !== 'OTHER';
+  const urlNote = card.querySelector('.component-url-note');
+  urlNote.hidden = !['WEB', 'PROXY'].includes(type);
+  urlNote.textContent = `접속 URL은 시스템과 동일합니다: ${$('url').value || '시스템 URL 미등록'}`;
+  for (const field of ['commonAccount', 'servicePort']) card.querySelector(`label[for="${control(field).id}"]`).textContent = componentLabel(type, field);
+  control('commonAccount').placeholder = type === 'DB' ? 'DB 사용자 / 비밀번호' : '아이디 / 비밀번호';
   for (const [field, same] of [['ip', 'useSystemIp'], ['sshPort', 'useSystemSshPort']]) {
     const input = control(field); const checked = control(same).checked;
     if (checked && !input.disabled) input.dataset.manualValue = input.value;
@@ -187,7 +207,11 @@ function syncComponentEditor(card) {
   }
 }
 function readComponents() {
-  return [...$('component-editors').children].map(card => Object.fromEntries([...card.querySelectorAll('[data-field]')].map(control => [control.dataset.field, control.type === 'checkbox' ? control.checked : control.disabled ? '' : control.value])));
+  return [...$('component-editors').children].map(card => {
+    const component = Object.fromEntries([...card.querySelectorAll('[data-field]')].map(control => [control.dataset.field, control.type === 'checkbox' ? control.checked : control.disabled ? '' : control.value]));
+    if (component.type !== 'OTHER') component.url = card.dataset.savedUrl;
+    return component;
+  });
 }
 async function openHistory(site) {
   const request = ++historyRequest;
@@ -203,7 +227,7 @@ function historyValue(field, value, reveal, snapshot) {
     const details = componentFields.filter(key => key !== 'name').map(key => {
       const same = key === 'ip' && component.useSystemIp || key === 'sshPort' && component.useSystemSshPort;
       if (!same && !component[key]) return '';
-      return `${labels[key]}: ${same ? `시스템과 동일 (${escapeHtml(snapshot?.[key]) || '미등록'})` : historyValue(key, component[key], reveal, snapshot)}`;
+      return `${componentLabel(component.type, key)}: ${same ? `시스템과 동일 (${escapeHtml(snapshot?.[key]) || '미등록'})` : historyValue(key, component[key], reveal, snapshot)}`;
     }).filter(Boolean).join('\n');
     return `${componentTypes[component.type]} · ${escapeHtml(component.name)}\n${details}`;
   }).join('\n\n') || '—';
@@ -266,8 +290,8 @@ $('confirm-group-delete').addEventListener('click', async () => {
   } catch (error) { errorAt('group-delete-error', error.message); }
   finally { $('confirm-group-delete').disabled = false; }
 });
-$('expand-groups').addEventListener('click', () => { collapsedGroups.clear(); render(); });
-$('collapse-groups').addEventListener('click', () => { [...groups.map(group => group.id), null].forEach(id => collapsedGroups.add(id)); render(); });
+$('expand-groups').addEventListener('click', () => { collapsedGroups.clear(); collapsedSystems.clear(); render(); });
+$('collapse-groups').addEventListener('click', () => { [...groups.map(group => group.id), null].forEach(id => collapsedGroups.add(id)); sites.forEach(site => collapsedSystems.add(site.id)); render(); });
 $('active-rows').addEventListener('click', event => {
   const button = event.target.closest('button[data-group-id]'); if (!button) return;
   if ($('search').value.trim() || $('access-filter').value !== 'all') return;
@@ -297,13 +321,18 @@ $('component-editors').addEventListener('click', event => {
   const button = event.target.closest('.remove-component'); if (!button) return;
   button.closest('.component-editor').remove(); $('components-empty').hidden = Boolean($('component-editors').children.length); $('add-component').focus();
 });
-for (const field of ['ip', 'sshPort']) $(field).addEventListener('input', () => { for (const card of $('component-editors').children) syncComponentEditor(card); });
+for (const field of ['url', 'ip', 'sshPort']) $(field).addEventListener('input', () => { for (const card of $('component-editors').children) syncComponentEditor(card); });
 $('site-form').addEventListener('invalid', event => { const card = event.target.closest('.component-editor'); if (card) card.open = true; }, true);
 $('delete-dialog').addEventListener('close', () => { deleting = null; });
 $('history-dialog').addEventListener('close', () => { historyRequest++; histories = []; $('history-content').replaceChildren(); });
 for (const id of ['active-rows', 'deleted-rows']) $(id).addEventListener('click', event => {
   const button = event.target.closest('button[data-action]'); if (!button) return;
   const site = sites.find(item => item.id === Number(button.dataset.id)); if (!site) return;
+  if (button.dataset.action === 'toggle-components') {
+    if ($('search').value.trim() || $('access-filter').value !== 'all') return;
+    collapsedSystems.has(site.id) ? collapsedSystems.delete(site.id) : collapsedSystems.add(site.id); render();
+    $(id).querySelector(`button[data-action="toggle-components"][data-id="${site.id}"]`)?.focus();
+  }
   if (button.dataset.action === 'edit') openEditor(site);
   if (button.dataset.action === 'components') { openEditor(site); $('add-component').focus(); }
   if (button.dataset.action === 'edit-component') {

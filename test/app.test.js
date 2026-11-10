@@ -618,3 +618,31 @@ test('하위 정보: 기존 DB·과거 기록 무변경, 재시작 유지, 백�
   await assert.rejects(app.store.mutate('update', 1, { ...saved.site, components: [] }, actor), error => error.status === 503);
   assert.deepEqual(app.store.find(1), saved.site); assert.deepEqual(app.store.history(1), beforeHistory);
 });
+
+test('Reverse Proxy: WEB 없이 WAS·DB·프록시 구성 저장 및 기존 계정·URL 보존', async t => {
+  const { client, store, backupDir } = await setup(t);
+  const request = client();
+  await request('/api/register', 'POST', credentials);
+  const created = await request('/api/sites', 'POST', { ...sample, components: [
+    { type: 'WAS', name: 'Tomcat', url: 'https://legacy-was.example.com', useSystemIp: true, useSystemSshPort: true },
+    { type: 'DB', name: 'PostgreSQL', url: 'https://legacy-db.example.com', commonAccount: 'db-user / test-password', servicePort: '5432' },
+    { type: 'PROXY', name: 'Traefik', servicePort: '80, 443', useSystemIp: true, useSystemSshPort: true, notes: 'WEB 없이 프록시로 연결' },
+  ] });
+  assert.equal(created.status, 201);
+  const site = created.body.site;
+  assert.deepEqual(site.components.map(item => item.type), ['WAS', 'DB', 'PROXY']);
+  assert.equal(site.components[2].url, '');
+  assert.equal(site.components[2].servicePort, '80, 443');
+  const backups = await readdir(backupDir);
+  assert.equal((await request(`/api/sites/${site.id}`, 'PUT', site)).body.changed, false);
+  assert.deepEqual(await readdir(backupDir), backups);
+  const updated = await request(`/api/sites/${site.id}`, 'PUT', { ...site, url: 'https://new.example.com' });
+  assert.equal(updated.status, 200);
+  assert.deepEqual(updated.body.site.components, site.components);
+  assert.equal(updated.body.site.components[1].commonAccount, 'db-user / test-password');
+  assert.equal(updated.body.site.components[0].url, 'https://legacy-was.example.com');
+  assert.equal(updated.body.site.components[1].url, 'https://legacy-db.example.com');
+  assert.deepEqual(store.history(site.id)[0].before.components, site.components);
+  assert.deepEqual(store.history(site.id)[0].after.components, site.components);
+  assert.deepEqual((await request('/api/sites')).body.sites[0].components, site.components);
+});

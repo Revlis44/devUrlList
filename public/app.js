@@ -9,7 +9,9 @@ let groups = [];
 let editingGroup = null;
 let deletingGroup = null;
 const collapsedGroups = new Set();
-const expandedSystems = new Set();
+const expandedComponents = new Set();
+let directoryScope = { type: 'all' };
+let selectedSiteId = null;
 let currentUser = null;
 let registerMode = false;
 let editing = null;
@@ -39,16 +41,16 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 function showAuth() {
-  currentUser = null; sites = []; groups = []; collapsedGroups.clear(); expandedSystems.clear(); histories = []; revealed.clear(); listRequest++; historyRequest++;
+  currentUser = null; sites = []; groups = []; collapsedGroups.clear(); expandedComponents.clear(); directoryScope = { type: 'all' }; selectedSiteId = null; histories = []; revealed.clear(); listRequest++; historyRequest++;
   document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
-  $('group-form').reset(); $('group-list').replaceChildren(); $('site-form').reset(); $('component-editors').replaceChildren(); $('history-content').replaceChildren(); $('active-rows').replaceChildren(); $('deleted-rows').replaceChildren();
+  $('group-form').reset(); $('group-list').replaceChildren(); $('site-form').reset(); $('component-editors').replaceChildren(); $('history-content').replaceChildren(); $('system-list').replaceChildren(); $('system-detail').replaceChildren(); $('group-tree').replaceChildren();
   $('auth-form').reset(); $('app-view').hidden = true; $('auth-view').hidden = false; $('boot').hidden = true;
 }
 async function showApp(user) {
   currentUser = user; $('user-name').textContent = `${user.name}님`; $('user-avatar').textContent = user.name.slice(0, 1);
   $('user-account').textContent = `${user.username} · ${user.jobTitle}`;
   $('auth-form').reset(); errorAt('auth-error'); $('auth-view').hidden = true; $('boot').hidden = true; $('app-view').hidden = false;
-  $('deleted-section').open = false; $('search').value = ''; $('access-filter').value = 'all';
+  $('search').value = ''; $('access-filter').value = 'all';
   await loadSites();
 }
 async function loadSites() {
@@ -71,45 +73,54 @@ function matches(site) {
 }
 function secretCell(site, field, componentIndex = null) {
   const item = componentIndex === null ? site : site.components[componentIndex];
-  const accountLabel = componentIndex !== null && item.type === 'DB' && field === 'commonAccount' ? '<span class="account-label">DB계정</span>' : '';
-  if (!item[field]) return `${accountLabel}<span class="dash">—</span>`;
+  if (!item[field]) return '<span class="dash">미등록</span>';
   const key = `${site.id}:${componentIndex ?? 'system'}:${field}`;
   const open = revealed.has(key);
-  return `${accountLabel}${open ? `<span class="secret-value">${escapeHtml(item[field])}</span>` : ''}<button class="secret-button" data-action="secret" data-id="${site.id}" ${componentIndex === null ? '' : `data-component="${componentIndex}"`} data-field="${field}" aria-label="${escapeHtml(item.name ?? site.systemName)} ${componentLabel(item.type, field)} ${open ? '숨기기' : '보기'}" aria-pressed="${open}">${open ? '숨기기' : '•••••• 보기'}</button>`;
+  return `${open ? `<span class="secret-value">${escapeHtml(item[field])}</span>` : ''}<button class="secret-button" data-action="secret" data-id="${site.id}" ${componentIndex === null ? '' : `data-component="${componentIndex}"`} data-field="${field}" aria-label="${escapeHtml(item.name ?? site.systemName)} ${componentLabel(item.type, field)} ${open ? '숨기기' : '보기'}" aria-pressed="${open}">${open ? '숨기기' : '•••••• 보기'}</button>`;
 }
-function treeOffset(depth) {
-  return `<span class="tree-offset" aria-hidden="true">${'<span class="tree-step"></span>'.repeat(depth)}</span>`;
+function scopeIncludes(site) {
+  if (directoryScope.type === 'system') return site.id === directoryScope.id;
+  if (directoryScope.type !== 'group') return true;
+  if (site.groupId === directoryScope.id) return true;
+  for (let group = groups.find(item => item.id === site.groupId); group; group = groups.find(item => item.id === group.parentId)) {
+    if (group.id === directoryScope.id) return true;
+  }
+  return false;
 }
-function componentRows(site, depth) {
-  return (site.components ?? []).map((component, index) => {
-    const value = key => escapeHtml(component[key]) || '<span class="dash">—</span>';
-    const inherited = (key, same) => same ? `${escapeHtml(site[key]) || '미등록'}<span class="inherited-label">시스템과 동일</span>` : value(key);
-    const url = componentUrl(site, component);
-    const systemUrl = ['WEB', 'PROXY'].includes(component.type);
-    return `<tr class="component-row"><td></td><td class="system-name"><div class="tree-entry">${treeOffset(depth + 1)}<div class="component-content"><span class="component-type">${componentTypes[component.type]}</span>${value('name')}</div></div></td><td>${url ? `<a class="url-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)} ↗</a>` : '<span class="dash">—</span>'}${systemUrl ? `<span class="inherited-label">${url ? '시스템과 동일' : '시스템 URL 미등록'}</span>` : ''}</td><td>${secretCell(site, 'commonAccount', index)}</td><td class="mono">${inherited('ip', component.useSystemIp)}</td><td class="mono">${value('servicePort')}</td><td class="mono">${inherited('sshPort', component.useSystemSshPort)}</td><td>${secretCell(site, 'serverAccount', index)}</td><td><span class="badge ${component.externalAccess}">${accessLabels[component.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td>${site.deletedAt ? '' : `<div class="row-actions"><button data-action="edit-component" data-id="${site.id}" data-component="${index}">하위 정보 수정</button></div>`}</td></tr>`;
-  }).join('');
-}
-function row(site, depth = 0) {
-  const value = key => site[key] ? escapeHtml(site[key]) : '<span class="dash">—</span>';
-  const url = site.url ? new URL(site.url) : null;
-  const count = site.components?.length ?? 0;
-  const filtering = Boolean($('search').value.trim()) || $('access-filter').value !== 'all';
-  const open = filtering || expandedSystems.has(site.id);
-  const controls = `<span class="component-controls">${count ? `<button class="component-toggle" data-action="toggle-components" data-id="${site.id}" aria-label="${escapeHtml(site.systemName)} 하위 정보 ${count}개 ${open ? '접기' : '펼치기'}" aria-expanded="${open}" ${filtering ? 'disabled title="검색·필터 적용 중에는 하위 정보를 자동으로 펼칩니다."' : ''}><span class="component-chevron" aria-hidden="true">${open ? '▾' : '▸'}</span> 하위 정보 ${count}개</button>` : '<span class="row-meta">하위 정보 없음</span>'}${site.deletedAt ? '' : `<button class="component-link" data-action="components" data-id="${site.id}">추가·수정</button>`}</span>`;
-  return `<tr class="system-row"><td class="row-number"></td><td class="system-name"><div class="tree-entry">${treeOffset(depth)}<div class="system-content"><span class="system-title">${escapeHtml(site.systemName)}</span>${controls}<span class="row-meta">${site.deletedAt ? `${escapeHtml(groupPath(site.groupId))} · 삭제 ` : ''}${formatDate(site.updatedAt, true)} · ${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</span></div></div></td><td>${url ? `<a class="url-link" href="${escapeHtml(site.url)}" target="_blank" rel="noopener noreferrer"><span class="protocol">${url.protocol}//</span>${escapeHtml(site.url.slice(url.protocol.length + 2))}<span class="url-arrow" aria-hidden="true">↗</span></a>` : '<span class="dash">—</span>'}</td><td>${secretCell(site, 'commonAccount')}</td><td class="mono">${value('ip')}</td><td class="mono">${value('servicePort')}</td><td class="mono">${value('sshPort')}</td><td>${secretCell(site, 'serverAccount')}</td><td><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></td><td class="notes">${value('notes')}</td><td><div class="row-actions">${site.deletedAt ? `<button class="delete-button" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button data-action="edit" data-id="${site.id}">수정</button><button class="delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="history-button" data-action="history" data-id="${site.id}">기록보기 <span aria-hidden="true">↗</span></button></div></td></tr>${open ? componentRows(site, depth) : ''}`;
-}
+function isFiltering() { return Boolean($('search').value.trim()) || $('access-filter').value !== 'all'; }
 function render() {
+  const previousSelection = selectedSiteId;
   const active = sites.filter(site => !site.deletedAt);
   const deleted = sites.filter(site => site.deletedAt);
-  const shown = active.filter(matches);
-  const removed = deleted.filter(matches);
+  if (directoryScope.type === 'group' && directoryScope.id !== null && !groups.some(group => group.id === directoryScope.id) || directoryScope.type === 'system' && !active.some(site => site.id === directoryScope.id)) directoryScope = { type: 'all' };
+  const removed = directoryScope.type === 'deleted';
+  const source = removed ? deleted : active;
+  const order = new Map(orderedGroups().map((group, index) => [group.id, index]));
+  const shown = source.filter(site => scopeIncludes(site) && matches(site)).sort((a, b) => (order.get(a.groupId) ?? groups.length) - (order.get(b.groupId) ?? groups.length) || a.id - b.id);
+  if (!shown.some(site => site.id === selectedSiteId)) { selectedSiteId = shown[0]?.id ?? null; revealed.clear(); }
   $('active-count').textContent = active.length; $('external-count').textContent = active.filter(site => site.externalAccess === 'yes').length;
-  $('deleted-count').textContent = deleted.length; $('deleted-summary-count').textContent = deleted.length; $('result-count').textContent = `${shown.length} / ${active.length}`;
-  renderTree(shown, active.length);
-  $('deleted-rows').innerHTML = removed.length ? removed.map(site => row(site)).join('') : `<tr><td colspan="11" class="empty-cell">${deleted.length ? '검색 조건에 맞는 삭제된 시스템이 없습니다.' : '삭제된 시스템이 없습니다.'}</td></tr>`;
-  for (const id of ['active-rows', 'deleted-rows']) {
-    $(id).querySelectorAll('.row-number').forEach((cell, index) => { cell.textContent = String(index + 1).padStart(2, '0'); });
-  }
+  $('deleted-count').textContent = deleted.length; $('deleted-summary-count').textContent = deleted.length; $('navigation-total').textContent = active.length;
+  $('browse-all').setAttribute('aria-current', String(directoryScope.type === 'all')); $('browse-deleted').setAttribute('aria-current', String(removed));
+  const title = removed ? '삭제된 시스템' : directoryScope.type === 'group' ? groupPath(directoryScope.id) : directoryScope.type === 'system' ? active.find(site => site.id === directoryScope.id).systemName : '전체 시스템';
+  $('list-title').textContent = title;
+  $('list-description').textContent = removed ? '보관된 정보와 변경 기록을 확인하세요.' : directoryScope.type === 'group' ? '선택한 그룹과 하위 그룹의 시스템입니다.' : directoryScope.type === 'system' ? '트리에서 선택한 시스템입니다.' : '시스템을 선택하면 상세 정보를 확인할 수 있습니다.';
+  $('result-count').textContent = `${shown.length}개`;
+  $('system-list').innerHTML = shown.map((site, index) => `<button type="button" class="system-list-item" data-select-site="${site.id}" aria-pressed="${site.id === selectedSiteId}"><span class="list-item-heading"><span class="list-number">${String(index + 1).padStart(2, '0')}</span><strong>${escapeHtml(site.systemName)}</strong><span class="list-selection-arrow" aria-hidden="true">›</span></span><span class="list-group-path">${escapeHtml(groupPath(site.groupId))}</span><span class="list-address mono">${escapeHtml(site.ip) || 'IP 미등록'}<span>SSH ${escapeHtml(site.sshPort) || '—'}</span></span><span class="list-url">${escapeHtml(site.url) || 'URL 미등록'}</span><span class="list-item-footer"><span>하위 정보 ${site.components?.length ?? 0}개</span><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></span></button>`).join('') || `<p class="explorer-empty">${isFiltering() ? '검색 조건에 맞는 시스템이 없습니다.' : removed ? '삭제된 시스템이 없습니다.' : '등록된 시스템이 없습니다. 시스템 추가에서 이 그룹을 지정할 수 있습니다.'}</p>`;
+  renderTree(active.filter(matches)); renderDetails(sites.find(site => site.id === selectedSiteId));
+  if (previousSelection !== selectedSiteId) $('system-detail').scrollTop = 0;
+}
+function detailField(label, content, full = false) { return `<div class="detail-field${full ? ' detail-full' : ''}"><dt>${label}</dt><dd>${content}</dd></div>`; }
+function detailUrl(url) { return url ? `<a class="url-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)} <span aria-hidden="true">↗</span></a>` : '<span class="dash">미등록</span>'; }
+function renderDetails(site) {
+  if (!site) { $('system-detail').innerHTML = '<div class="detail-empty"><span aria-hidden="true">☷</span><h2>시스템 상세 정보</h2><p>가운데 목록에서 시스템을 선택해 주세요.</p></div>'; return; }
+  const value = key => escapeHtml(site[key]) || '<span class="dash">미등록</span>';
+  const components = site.components ?? [];
+  $('system-detail').innerHTML = `<div class="detail-heading"><span class="eyebrow">SYSTEM DETAILS</span><p class="detail-path">${escapeHtml(groupPath(site.groupId))}</p><h2>${escapeHtml(site.systemName)}</h2><div class="detail-status"><span class="badge ${site.externalAccess}">외부접근 ${accessLabels[site.externalAccess]}</span>${site.deletedAt ? '<span class="deleted-label">삭제된 시스템</span>' : ''}</div><p class="row-meta">${site.deletedAt ? '삭제' : '최근 변경'} ${formatDate(site.updatedAt)}<br>${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</p><div class="detail-actions">${site.deletedAt ? `<button class="button danger" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button class="button secondary" data-action="edit" data-id="${site.id}">시스템 수정</button><button class="text-button delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="button secondary" data-action="history" data-id="${site.id}">변경 기록</button></div></div><section class="detail-section" aria-label="시스템 접속 정보"><h3>접속 정보</h3><dl class="detail-grid">${detailField('URL', detailUrl(site.url), true)}${['ip', 'servicePort', 'sshPort'].map(key => detailField(labels[key], `<span class="mono">${value(key)}</span>`)).join('')}${detailField('외부접근가능여부', accessLabels[site.externalAccess])}${detailField('공통계정', secretCell(site, 'commonAccount'))}${detailField('서버계정', secretCell(site, 'serverAccount'))}${detailField('비고', `<span class="detail-notes">${value('notes')}</span>`, true)}</dl></section><section class="detail-section" aria-label="시스템 하위 정보"><div class="detail-section-heading"><h3>하위 정보 <span class="count-badge">${components.length}</span></h3>${site.deletedAt ? '' : `<button class="text-button" data-action="components" data-id="${site.id}">추가·수정</button>`}</div>${components.length ? `<div class="component-detail-actions"><button class="text-button" data-action="expand-components" data-id="${site.id}">모두 펼치기</button><button class="text-button" data-action="collapse-components" data-id="${site.id}" ${isFiltering() ? 'disabled title="검색·필터 적용 중에는 하위 정보를 자동으로 펼칩니다."' : ''}>모두 접기</button></div>` : '<p class="muted">등록된 하위 항목이 없습니다.</p>'}${components.map((component, index) => {
+    const key = `${site.id}:${index}`;
+    const inherited = (field, same) => same ? `${value(field)}<span class="inherited-label">시스템과 동일</span>` : escapeHtml(component[field]) || '<span class="dash">미등록</span>';
+    const hasUrl = ['WEB', 'PROXY', 'OTHER'].includes(component.type);
+    return `<details class="component-detail" data-component-key="${key}" ${isFiltering() || expandedComponents.has(key) ? 'open' : ''}><summary><span class="component-detail-chevron" aria-hidden="true"></span><span class="component-type">${componentTypes[component.type]}</span><span class="component-detail-name">${escapeHtml(component.name)}</span></summary><dl class="detail-grid">${hasUrl ? detailField('URL', detailUrl(componentUrl(site, component)) + (component.type !== 'OTHER' ? '<span class="inherited-label">시스템과 동일</span>' : ''), true) : ''}${detailField('IP', `<span class="mono">${inherited('ip', component.useSystemIp)}</span>`)}${detailField(componentLabel(component.type, 'servicePort'), `<span class="mono">${escapeHtml(component.servicePort) || '미등록'}</span>`)}${detailField('SSH포트', `<span class="mono">${inherited('sshPort', component.useSystemSshPort)}</span>`)}${detailField('외부접근가능여부', accessLabels[component.externalAccess])}${detailField(componentLabel(component.type, 'commonAccount'), secretCell(site, 'commonAccount', index))}${detailField('서버계정', secretCell(site, 'serverAccount', index))}${detailField('비고', `<span class="detail-notes">${escapeHtml(component.notes) || '미등록'}</span>`, true)}</dl>${site.deletedAt ? '' : `<button class="text-button component-edit-link" data-action="edit-component" data-id="${site.id}" data-component="${index}">하위 정보 수정</button>`}</details>`;
+  }).join('')}</section>`;
 }
 function groupPath(id) {
   const names = [];
@@ -126,21 +137,20 @@ function groupOptions(emptyLabel, excludedId = null) {
     return excluded.has(group.id) ? '' : `<option value="${group.id}">${escapeHtml(groupPath(group.id))}</option>`;
   }).join('');
 }
-function renderTree(shown, total) {
-  const filtering = Boolean($('search').value.trim()) || $('access-filter').value !== 'all';
+function renderTree(shown) {
+  const filtering = isFiltering();
   function branch(group, depth) {
     const children = groups.filter(item => group.id !== null && item.parentId === group.id).sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id - b.id).map(child => branch(child, depth + 1));
     const members = shown.filter(site => site.groupId === group.id);
     const count = members.length + children.reduce((sum, child) => sum + child.count, 0);
     if (filtering && !count) return { count: 0, html: '' };
     const open = filtering || !collapsedGroups.has(group.id);
-    const header = `<tr class="group-row ${depth ? 'group-child' : 'group-root'}"><td></td><td colspan="10"><button class="group-toggle" data-group-id="${group.id ?? ''}" aria-expanded="${open}" ${filtering ? 'disabled title="검색·필터 적용 중에는 일치하는 그룹을 자동으로 펼칩니다."' : ''}>${treeOffset(depth)}<span class="group-chevron" aria-hidden="true">${open ? '▾' : '▸'}</span><span class="group-label">${escapeHtml(group.name)}</span><span class="group-level">${depth ? `${depth + 1}단계 그룹` : '상위 그룹'}</span><span class="group-count">${count}개</span></button></td></tr>`;
-    return { count, html: header + (open ? children.map(child => child.html).join('') + members.map(site => row(site, depth + 1)).join('') + (!count && !children.length ? '<tr><td></td><td colspan="10" class="empty-group">등록된 서버가 없습니다. 시스템 수정에서 이 그룹을 지정하세요.</td></tr>' : '') : '') };
+    return { count, html: `<li class="navigation-group ${depth ? 'nested-group' : 'root-group'}"><div class="navigation-group-heading"><button class="navigation-chevron" data-nav="toggle" data-id="${group.id ?? ''}" aria-label="${escapeHtml(group.name)} ${open ? '접기' : '펼치기'}" aria-expanded="${open}" ${filtering ? 'disabled' : ''}>${open ? '▾' : '▸'}</button><button class="navigation-label" data-nav="group" data-id="${group.id ?? ''}" aria-current="${directoryScope.type === 'group' && directoryScope.id === group.id}"><span>${escapeHtml(group.name)}</span><small>${count}</small></button></div>${open ? `<ul>${children.map(child => child.html).join('')}${members.map(site => `<li><button class="navigation-system" data-nav="system" data-id="${site.id}" aria-current="${directoryScope.type === 'system' && directoryScope.id === site.id}"><span class="navigation-system-dot" aria-hidden="true"></span><span>${escapeHtml(site.systemName)}</span></button></li>`).join('')}${!count && !children.length ? '<li class="navigation-empty">등록된 시스템 없음</li>' : ''}</ul>` : ''}</li>` };
   }
   const roots = groups.filter(group => group.parentId === null).sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id - b.id);
   let html = roots.map(group => branch(group, 0).html).join('');
-  if (shown.some(site => site.groupId === null)) html += branch({ id: null, name: '미분류' }, 0).html;
-  $('active-rows').innerHTML = html || `<tr><td colspan="11" class="empty-cell">${total ? '검색 조건에 맞는 시스템이 없습니다.' : '등록된 시스템이 없습니다. 첫 번째 시스템을 추가해 주세요.'}</td></tr>`;
+  if (sites.some(site => !site.deletedAt && site.groupId === null) || directoryScope.type === 'group' && directoryScope.id === null) html += branch({ id: null, name: '미분류' }, 0).html;
+  $('group-tree').innerHTML = html || '<li class="navigation-empty">표시할 그룹이 없습니다.</li>';
   $('collapse-groups').disabled = filtering;
 }
 function renderGroupList() {
@@ -160,7 +170,7 @@ function editGroup(group = null) {
 function openEditor(site = null) {
   editing = site; $('site-form').reset(); errorAt('editor-error');
   $('editor-title').textContent = site ? '시스템 수정' : '시스템 추가';
-  const data = site ?? { externalAccess: 'unknown' };
+  const data = site ?? { externalAccess: 'unknown', groupId: directoryScope.type === 'group' ? directoryScope.id : sites.find(item => item.id === selectedSiteId)?.groupId ?? null };
   $('groupId').innerHTML = groupOptions('미분류');
   for (const field of Object.keys(labels).filter(field => !['deleted', 'components'].includes(field))) $(field).value = data[field] ?? '';
   $('component-editors').replaceChildren();
@@ -293,15 +303,33 @@ $('confirm-group-delete').addEventListener('click', async () => {
   } catch (error) { errorAt('group-delete-error', error.message); }
   finally { $('confirm-group-delete').disabled = false; }
 });
-$('expand-groups').addEventListener('click', () => { collapsedGroups.clear(); sites.forEach(site => expandedSystems.add(site.id)); render(); });
-$('collapse-groups').addEventListener('click', () => { [...groups.map(group => group.id), null].forEach(id => collapsedGroups.add(id)); expandedSystems.clear(); render(); });
-$('active-rows').addEventListener('click', event => {
-  const button = event.target.closest('button[data-group-id]'); if (!button) return;
-  if ($('search').value.trim() || $('access-filter').value !== 'all') return;
-  const id = button.dataset.groupId ? Number(button.dataset.groupId) : null;
-  collapsedGroups.has(id) ? collapsedGroups.delete(id) : collapsedGroups.add(id); render();
-  $('active-rows').querySelector(`button[data-group-id="${id ?? ''}"]`)?.focus();
+$('expand-groups').addEventListener('click', () => { collapsedGroups.clear(); renderTree(sites.filter(site => !site.deletedAt && matches(site))); });
+$('collapse-groups').addEventListener('click', () => { [...groups.map(group => group.id), null].forEach(id => collapsedGroups.add(id)); renderTree(sites.filter(site => !site.deletedAt && matches(site))); });
+$('directory-navigation').addEventListener('click', event => {
+  const button = event.target.closest('button[data-nav]'); if (!button) return;
+  const type = button.dataset.nav;
+  const id = button.dataset.id ? Number(button.dataset.id) : null;
+  if (type === 'toggle') {
+    if (isFiltering()) return;
+    collapsedGroups.has(id) ? collapsedGroups.delete(id) : collapsedGroups.add(id);
+    renderTree(sites.filter(site => !site.deletedAt && matches(site)));
+    $('group-tree').querySelector(`button[data-nav="toggle"][data-id="${id ?? ''}"]`)?.focus();
+    return;
+  }
+  directoryScope = { type, id }; selectedSiteId = type === 'system' ? id : null; revealed.clear(); render(); $('system-detail').scrollTop = 0;
+  $('directory-navigation').querySelector(type === 'group' || type === 'system' ? `button[data-nav="${type}"][data-id="${id ?? ''}"]` : `button[data-nav="${type}"]`)?.focus();
 });
+$('system-list').addEventListener('click', event => {
+  const button = event.target.closest('button[data-select-site]'); if (!button) return;
+  selectedSiteId = Number(button.dataset.selectSite); revealed.clear(); render(); $('system-detail').scrollTop = 0;
+  $('system-list').querySelector(`button[data-select-site="${selectedSiteId}"]`)?.focus();
+  if (matchMedia('(max-width:850px)').matches) $('system-detail').scrollIntoView({ block: 'start' });
+});
+$('system-detail').addEventListener('toggle', event => {
+  const card = event.target;
+  if (!card.matches('.component-detail') || !card.isConnected || isFiltering()) return;
+  card.open ? expandedComponents.add(card.dataset.componentKey) : expandedComponents.delete(card.dataset.componentKey);
+}, true);
 $('login-tab').addEventListener('click', () => setAuthMode(false));
 $('register-tab').addEventListener('click', () => setAuthMode(true));
 $('auth-form').addEventListener('submit', async event => {
@@ -328,13 +356,16 @@ for (const field of ['url', 'ip', 'sshPort']) $(field).addEventListener('input',
 $('site-form').addEventListener('invalid', event => { const card = event.target.closest('.component-editor'); if (card) card.open = true; }, true);
 $('delete-dialog').addEventListener('close', () => { deleting = null; });
 $('history-dialog').addEventListener('close', () => { historyRequest++; histories = []; $('history-content').replaceChildren(); });
-for (const id of ['active-rows', 'deleted-rows']) $(id).addEventListener('click', event => {
+$('system-detail').addEventListener('click', event => {
   const button = event.target.closest('button[data-action]'); if (!button) return;
   const site = sites.find(item => item.id === Number(button.dataset.id)); if (!site) return;
-  if (button.dataset.action === 'toggle-components') {
-    if ($('search').value.trim() || $('access-filter').value !== 'all') return;
-    expandedSystems.has(site.id) ? expandedSystems.delete(site.id) : expandedSystems.add(site.id); render();
-    $(id).querySelector(`button[data-action="toggle-components"][data-id="${site.id}"]`)?.focus();
+  if (['expand-components', 'collapse-components'].includes(button.dataset.action)) {
+    if (button.dataset.action === 'collapse-components' && isFiltering()) return;
+    (site.components ?? []).forEach((component, index) => {
+      const key = `${site.id}:${index}`;
+      button.dataset.action === 'expand-components' ? expandedComponents.add(key) : expandedComponents.delete(key);
+    });
+    renderDetails(site); $('system-detail').querySelector(`button[data-action="${button.dataset.action}"]`)?.focus();
   }
   if (button.dataset.action === 'edit') openEditor(site);
   if (button.dataset.action === 'components') { openEditor(site); $('add-component').focus(); }
@@ -345,7 +376,7 @@ for (const id of ['active-rows', 'deleted-rows']) $(id).addEventListener('click'
   if (['delete', 'permanent-delete'].includes(button.dataset.action)) {
     deleting = site; errorAt('delete-error'); $('delete-name').textContent = site.systemName;
     $('delete-title').textContent = site.deletedAt ? '시스템을 완전 삭제할까요?' : '시스템을 삭제할까요?';
-    $('delete-description').textContent = site.deletedAt ? '접속 정보와 변경 기록이 완전히 삭제되며, 목록에서 복구할 수 없습니다. 계속하시겠습니까?' : '목록 아래의 ‘삭제된 목록’으로 이동합니다. 접속 정보와 변경 기록은 보관됩니다.';
+    $('delete-description').textContent = site.deletedAt ? '접속 정보와 변경 기록이 완전히 삭제되며, 목록에서 복구할 수 없습니다. 계속하시겠습니까?' : '좌측의 ‘삭제된 시스템’으로 이동합니다. 접속 정보와 변경 기록은 보관됩니다.';
     $('confirm-delete').textContent = site.deletedAt ? '완전 삭제하기' : '삭제하기';
     $('delete-dialog').showModal(); $('delete-dialog').querySelector('.button[data-close]').focus();
   }
@@ -362,6 +393,7 @@ $('site-form').addEventListener('submit', async event => {
   data.components = readComponents();
   try {
     const result = await api(item ? `/api/sites/${item.id}` : '/api/sites', { method: item ? 'PUT' : 'POST', body: data });
+    selectedSiteId = result.site.id; directoryScope = { type: 'group', id: result.site.groupId }; $('search').value = ''; $('access-filter').value = 'all';
     $('editor').close(); toast(result.changed ? '백업과 변경 기록을 저장했습니다.' : '변경된 내용이 없습니다.'); await loadSites();
   } catch (error) { errorAt('editor-error', error.message); }
   finally { $('save-site').disabled = false; }

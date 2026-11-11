@@ -7,8 +7,8 @@
   <title>개발서버 목록 · SAYIT</title>
   <link rel="icon" type="image/png" href="/favicon.png?ver=20261106">
   <script src="/theme.js?ver=20261110"></script>
-  <link rel="stylesheet" href="/styles.css?ver=20261110_2">
-  <script src="/app.js?ver=20261110_4" defer></script>
+  <link rel="stylesheet" href="/styles.css?ver=20261110_4">
+  <script src="/app.js?ver=20261110_6" defer></script>
 </head>
 <body>
   <div id="boot" role="status">개발서버 목록을 불러오는 중입니다…</div>
@@ -41,17 +41,25 @@
 
   <div id="app-view" hidden>
     <header class="topbar"><div class="brand"><img class="brand-mark" src="/favicon.png?ver=20261106" width="36" height="36" alt=""><span>SAYIT<span class="brand-sub">DEV DIRECTORY</span></span></div><div class="topbar-right"><div class="theme-switch" role="group" aria-label="화면 모드"><button type="button" data-set-theme="light" aria-label="라이트 모드" title="라이트 모드" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button><button type="button" data-set-theme="dark" aria-label="다크 모드" title="다크 모드" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.3A9 9 0 0 1 9.7 3.5 9 9 0 1 0 20.5 14.3Z"/></svg></button></div><span class="internal-badge"><span class="status-dot"></span> 사내 전용</span><div class="user-chip"><span id="user-avatar" class="avatar"></span><span><span id="user-name"></span><span id="user-account" class="row-meta"></span></span></div><button id="logout" class="text-button">로그아웃</button></div></header>
-    <main>
+    <main class="explorer-main">
       <div class="page-heading"><div><div class="eyebrow">TEAM WORKSPACE <span>/</span> INFRASTRUCTURE</div><h1>개발서버 목록<span class="title-dot">.</span></h1><p class="muted">우리 팀의 서버 주소와 접속 정보를 한곳에서 관리하세요.</p></div><div class="heading-actions"><button id="manage-groups" class="button secondary">그룹 관리</button><button id="add-site" class="button primary"><span aria-hidden="true">＋</span> 시스템 추가</button></div></div>
       <section class="overview" aria-label="목록 요약"><div><span class="stat-label">등록 시스템</span><strong id="active-count">0</strong><span class="stat-unit">개</span></div><div><span class="stat-label">외부접근 가능</span><strong id="external-count">0</strong><span class="stat-unit">개</span></div><div><span class="stat-label">삭제된 시스템</span><strong id="deleted-count">0</strong><span class="stat-unit">개</span></div><p class="backup-note"><span class="backup-icon" aria-hidden="true">↶</span><span><strong>변경 전 자동 백업</strong><small>이름과 변경 내용이 함께 기록됩니다</small></span></p></section>
-      <section class="directory" aria-label="개발서버 목록">
+      <section class="directory explorer-directory" aria-label="시스템 탐색기">
         <div class="toolbar"><div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="그룹, 시스템·하위 항목명, 구분, URL, IP, 비고 검색" aria-label="시스템 검색"></div><div class="filter-wrap"><label for="access-filter">외부접근</label><select id="access-filter"><option value="all">전체</option><option value="yes">가능</option><option value="no">불가</option><option value="unknown">미확인</option></select></div><button id="refresh" class="button secondary"><span aria-hidden="true">↻</span> 새로고침</button></div>
-        <div class="table-caption"><span>전체 시스템 <strong id="result-count">0</strong></span><div class="tree-actions"><button id="expand-groups" class="text-button">모두 펼치기</button><button id="collapse-groups" class="text-button">모두 접기</button></div><span>계정 정보는 ‘보기’를 눌러 확인하세요</span></div>
         <p id="list-error" class="error list-error" role="alert" hidden></p>
-        <div class="table-scroll" tabindex="0" role="region" aria-label="서버 목록 표, 좌우로 스크롤할 수 있습니다"><table><caption class="sr-only">현재 등록된 개발서버</caption><thead><tr><th scope="col">순서</th><th scope="col">시스템명</th><th scope="col">URL</th><th scope="col">접속계정</th><th scope="col">IP</th><th scope="col">서비스포트</th><th scope="col">SSH포트</th><th scope="col">서버계정</th><th scope="col">외부접근가능여부</th><th scope="col">비고</th><th scope="col">관리 · 기록</th></tr></thead><tbody id="active-rows"></tbody></table></div>
-        <div class="table-footer"><span><span class="small-dot"></span> 그룹명 · 그룹 내 등록 순서 기준 오름차순</span><span id="last-loaded"></span></div>
+        <div class="explorer-layout">
+          <nav id="directory-navigation" class="explorer-navigation" aria-label="그룹과 시스템 탐색">
+            <div class="navigation-heading"><h2>워크스페이스</h2></div>
+            <button id="browse-all" class="navigation-shortcut" data-nav="all" aria-current="true"><span aria-hidden="true">☷</span><span>전체 시스템</span><small id="navigation-total">0</small></button>
+            <div class="navigation-section-heading"><h3>그룹 · 시스템</h3><div class="tree-actions"><button id="expand-groups" class="text-button">펼치기</button><button id="collapse-groups" class="text-button">접기</button></div></div>
+            <ul id="group-tree" class="directory-tree"></ul>
+            <div class="navigation-bottom"><button id="browse-deleted" class="navigation-shortcut" data-nav="deleted" aria-current="false"><span aria-hidden="true">⌫</span><span>삭제된 시스템</span><small id="deleted-summary-count">0</small></button></div>
+          </nav>
+          <section class="explorer-list" aria-labelledby="list-title"><header class="explorer-list-heading"><span class="eyebrow">SYSTEMS</span><div><h2 id="list-title">전체 시스템</h2><span id="result-count" class="count-badge">0개</span></div><p id="list-description">시스템을 선택하면 상세 정보를 확인할 수 있습니다.</p></header><div id="system-list" class="system-list" aria-label="시스템 목록"></div></section>
+          <aside id="system-detail" class="explorer-detail" aria-label="선택한 시스템 상세 정보"></aside>
+        </div>
+        <div class="table-footer"><span><span class="small-dot"></span> 그룹명 · 그룹 내 등록 순서 기준</span><span id="last-loaded"></span></div>
       </section>
-      <details id="deleted-section" class="deleted-section"><summary><span>삭제된 목록 보기 <span id="deleted-summary-count" class="count-badge">0</span></span><span class="expand-sign" aria-hidden="true"></span></summary><div class="deleted-content"><p>삭제된 항목과 이전 변경 기록은 보관됩니다. 완전 삭제하면 접속 정보와 변경 기록이 함께 삭제됩니다.</p><div class="table-scroll" tabindex="0" role="region" aria-label="삭제된 서버 목록 표"><table><caption class="sr-only">삭제된 개발서버</caption><thead><tr><th scope="col">순서</th><th scope="col">시스템명</th><th scope="col">URL</th><th scope="col">접속계정</th><th scope="col">IP</th><th scope="col">서비스포트</th><th scope="col">SSH포트</th><th scope="col">서버계정</th><th scope="col">외부접근가능여부</th><th scope="col">비고</th><th scope="col">관리 · 기록</th></tr></thead><tbody id="deleted-rows"></tbody></table></div></div></details>
       <footer class="page-footer"><span>SAYIT <span class="muted">/ 개발 환경, 함께 관리합니다.</span></span><span>모든 시간은 한국 시간(KST) 기준</span></footer>
     </main>
   </div>
@@ -68,7 +76,7 @@
   </dialog>
   <dialog id="group-delete-dialog" class="small-dialog" aria-labelledby="group-delete-title"><div class="dialog-heading"><h2 id="group-delete-title">그룹을 삭제할까요?</h2><button type="button" class="close-button" data-close="group-delete-dialog" aria-label="닫기">×</button></div><p id="group-delete-name"></p><p class="muted">빈 그룹만 삭제됩니다. 변경 전 자동으로 백업합니다.</p><p id="group-delete-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button secondary" data-close="group-delete-dialog">취소</button><button id="confirm-group-delete" class="button danger">삭제하기</button></div></dialog>
   <dialog id="history-dialog" class="history-dialog" aria-labelledby="history-title"><div class="dialog-heading"><div><span class="eyebrow">CHANGE HISTORY</span><h2 id="history-title">변경 기록</h2><p id="history-system" class="muted"></p></div><button type="button" class="close-button" data-close="history-dialog" aria-label="닫기">×</button></div><div class="history-note">누가, 언제, 무엇을 바꿨는지 확인하세요. · 한국 시간(KST)</div><div id="history-content" aria-live="polite"></div></dialog>
-  <dialog id="delete-dialog" class="small-dialog" aria-labelledby="delete-title" aria-describedby="delete-name delete-description"><div class="dialog-heading"><h2 id="delete-title">시스템을 삭제할까요?</h2><button type="button" class="close-button" data-close="delete-dialog" aria-label="닫기">×</button></div><p id="delete-name"></p><p id="delete-description" class="muted">목록 아래의 ‘삭제된 목록’으로 이동합니다.<br>접속 정보와 변경 기록은 보관됩니다.</p><p id="delete-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button secondary" data-close="delete-dialog">취소</button><button id="confirm-delete" class="button danger">삭제하기</button></div></dialog>
+  <dialog id="delete-dialog" class="small-dialog" aria-labelledby="delete-title" aria-describedby="delete-name delete-description"><div class="dialog-heading"><h2 id="delete-title">시스템을 삭제할까요?</h2><button type="button" class="close-button" data-close="delete-dialog" aria-label="닫기">×</button></div><p id="delete-name"></p><p id="delete-description" class="muted">좌측의 ‘삭제된 시스템’으로 이동합니다.<br>접속 정보와 변경 기록은 보관됩니다.</p><p id="delete-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button secondary" data-close="delete-dialog">취소</button><button id="confirm-delete" class="button danger">삭제하기</button></div></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
 </body>
 </html>

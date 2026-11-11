@@ -30,6 +30,41 @@ async function setup(t, options = {}) {
 const sample = { systemName: '검증 서버', url: 'https://example.internal', commonAccount: 'tester / sample-password', ip: '192.168.1.20', servicePort: '8080, 443', sshPort: '22', serverAccount: 'dev', externalAccess: 'no', notes: '최초 값' };
 const credentials = { username: 'test-user', name: '검증 사용자', jobTitle: '대리', password: 'OnlyTestPassword123!' };
 
+test('HTTPS 프록시: 허용 주소 설정 전 차단, 설정 후 로그인·보안 쿠키·로그아웃', async t => {
+  const appOrigin = 'https://servers.example.com';
+  const headers = { Origin: appOrigin, 'Sec-Fetch-Site': 'same-origin' };
+  const unconfigured = await setup(t, { appOrigin: '', secureCookie: false });
+  const rejected = await unconfigured.client()('/api/login', 'POST', credentials, headers);
+  assert.equal(rejected.status, 403);
+  assert.equal(rejected.body.error, '요청 출처를 확인할 수 없습니다. 페이지를 새로고침해 주세요.');
+
+  const { client } = await setup(t, { appOrigin, secureCookie: true });
+  const request = client();
+  const registered = await request('/api/register', 'POST', credentials, headers);
+  assert.equal(registered.status, 201);
+  assert.match(registered.headers.get('set-cookie'), /; Secure(?:;|$)/);
+  assert.equal((await request('/api/logout', 'POST', {}, headers)).status, 200);
+  assert.equal((await request('/api/me')).body.user, null);
+
+  for (const patch of [
+    { Origin: 'https://other.example', 'X-Forwarded-Host': 'other.example', 'X-Forwarded-Proto': 'https' },
+    { Origin: 'http://servers.example.com' },
+    { 'Sec-Fetch-Site': 'cross-site' },
+    { 'X-Requested-With': '' },
+  ]) {
+    assert.equal((await request('/api/login', 'POST', credentials, { ...headers, ...patch })).status, 403);
+  }
+  const loggedIn = await request('/api/login', 'POST', credentials, headers);
+  assert.equal(loggedIn.status, 200);
+  assert.match(loggedIn.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
+  assert.match(loggedIn.headers.get('set-cookie'), /; Secure(?:;|$)/);
+  assert.equal((await request('/api/me')).body.user.username, credentials.username);
+  const loggedOut = await request('/api/logout', 'POST', {}, headers);
+  assert.equal(loggedOut.status, 200);
+  assert.match(loggedOut.headers.get('set-cookie'), /Max-Age=0; Secure(?:;|$)/);
+  assert.equal((await request('/api/me')).body.user, null);
+});
+
 test('로그인, 두 사용자 변경 이력, 실제 변경 전 백업, 삭제 보관, 세션 종료', async t => {
   const { client, store, backupDir } = await setup(t);
   const first = client(); const second = client();

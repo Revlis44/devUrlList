@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const labels = { systemName: '시스템명', url: 'URL', commonAccount: '공통계정', ip: 'IP', servicePort: '서비스포트', sshPort: 'SSH포트', serverAccount: '서버계정', externalAccess: '외부접근가능여부', notes: '비고', groupId: '그룹', components: '하위 정보', deleted: '삭제 상태' };
+const labels = { systemName: '시스템명', url: 'URL', commonAccount: '공통계정', ip: 'IP', servicePort: '서비스포트', sshPort: 'SSH포트', serverAccount: '서버계정', externalAccess: '외부접근가능여부', notes: '비고', groupId: '그룹', components: '하위 정보', deleted: '삭제 상태', position: '그룹 내 순서' };
 const componentTypes = { WAS: 'WAS', WEB: 'WEB', DB: 'DB', PROXY: 'Reverse Proxy', OTHER: '기타' };
 const componentFields = ['name', 'url', 'ip', 'externalAccess', 'servicePort', 'sshPort', 'commonAccount', 'serverAccount', 'notes'];
 let componentSequence = 0;
@@ -20,6 +20,9 @@ let histories = [];
 let historyRequest = 0;
 let listRequest = 0;
 let toastTimer;
+let draggingSite = null;
+let draggingGroup = null;
+let movingTree = false;
 const revealed = new Set();
 
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]); }
@@ -44,11 +47,15 @@ function showAuth() {
   currentUser = null; sites = []; groups = []; collapsedGroups.clear(); expandedComponents.clear(); directoryScope = { type: 'all' }; selectedSiteId = null; histories = []; revealed.clear(); listRequest++; historyRequest++;
   document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
   $('group-form').reset(); $('group-list').replaceChildren(); $('site-form').reset(); $('component-editors').replaceChildren(); $('history-content').replaceChildren(); $('system-list').replaceChildren(); $('system-detail').replaceChildren(); $('group-tree').replaceChildren();
+  draggingSite = null; draggingGroup = null; $('group-root-drop').hidden = true; $('profile-form').reset();
   $('auth-form').reset(); $('app-view').hidden = true; $('auth-view').hidden = false; $('boot').hidden = true;
 }
-async function showApp(user) {
+function renderUser(user) {
   currentUser = user; $('user-name').textContent = `${user.name}님`; $('user-avatar').textContent = user.name.slice(0, 1);
   $('user-account').textContent = `${user.username} · ${user.jobTitle}`;
+}
+async function showApp(user) {
+  renderUser(user);
   $('auth-form').reset(); errorAt('auth-error'); $('auth-view').hidden = true; $('boot').hidden = true; $('app-view').hidden = false;
   $('search').value = ''; $('access-filter').value = 'all';
   await loadSites();
@@ -88,6 +95,7 @@ function scopeIncludes(site) {
   return false;
 }
 function isFiltering() { return Boolean($('search').value.trim()) || $('access-filter').value !== 'all'; }
+function compareSiteOrder(a, b) { return (a.treeOrder ?? a.id) - (b.treeOrder ?? b.id) || a.id - b.id; }
 function render() {
   const previousSelection = selectedSiteId;
   const active = sites.filter(site => !site.deletedAt);
@@ -96,13 +104,14 @@ function render() {
   const removed = directoryScope.type === 'deleted';
   const source = removed ? deleted : active;
   const order = new Map(orderedGroups().map((group, index) => [group.id, index]));
-  const shown = source.filter(site => scopeIncludes(site) && matches(site)).sort((a, b) => (order.get(a.groupId) ?? groups.length) - (order.get(b.groupId) ?? groups.length) || a.id - b.id);
+  const shown = source.filter(site => scopeIncludes(site) && matches(site)).sort((a, b) => (order.get(a.groupId) ?? groups.length) - (order.get(b.groupId) ?? groups.length) || compareSiteOrder(a, b));
   if (!shown.some(site => site.id === selectedSiteId)) { selectedSiteId = shown[0]?.id ?? null; revealed.clear(); }
   $('active-count').textContent = active.length; $('external-count').textContent = active.filter(site => site.externalAccess === 'yes').length;
   $('deleted-count').textContent = deleted.length; $('deleted-summary-count').textContent = deleted.length; $('navigation-total').textContent = active.length;
   $('browse-all').setAttribute('aria-current', String(directoryScope.type === 'all')); $('browse-deleted').setAttribute('aria-current', String(removed));
   const title = removed ? '삭제된 시스템' : directoryScope.type === 'group' ? groupPath(directoryScope.id) : directoryScope.type === 'system' ? active.find(site => site.id === directoryScope.id).systemName : '전체 시스템';
   $('list-title').textContent = title;
+  $('add-group-site').hidden = directoryScope.type !== 'group';
   $('list-description').textContent = removed ? '보관된 정보와 변경 기록을 확인하세요.' : directoryScope.type === 'group' ? '선택한 그룹과 하위 그룹의 시스템입니다.' : directoryScope.type === 'system' ? '트리에서 선택한 시스템입니다.' : '시스템을 선택하면 상세 정보를 확인할 수 있습니다.';
   $('result-count').textContent = `${shown.length}개`;
   $('system-list').innerHTML = shown.map((site, index) => `<button type="button" class="system-list-item" data-select-site="${site.id}" aria-pressed="${site.id === selectedSiteId}"><span class="list-item-heading"><span class="list-number">${String(index + 1).padStart(2, '0')}</span><strong>${escapeHtml(site.systemName)}</strong><span class="list-selection-arrow" aria-hidden="true">›</span></span><span class="list-group-path">${escapeHtml(groupPath(site.groupId))}</span><span class="list-address mono">${escapeHtml(site.ip) || 'IP 미등록'}<span>SSH ${escapeHtml(site.sshPort) || '—'}</span></span><span class="list-url">${escapeHtml(site.url) || 'URL 미등록'}</span><span class="list-item-footer"><span>하위 정보 ${site.components?.length ?? 0}개</span><span class="badge ${site.externalAccess}">${accessLabels[site.externalAccess]}</span></span></button>`).join('') || `<p class="explorer-empty">${isFiltering() ? '검색 조건에 맞는 시스템이 없습니다.' : removed ? '삭제된 시스템이 없습니다.' : '등록된 시스템이 없습니다. 시스템 추가에서 이 그룹을 지정할 수 있습니다.'}</p>`;
@@ -127,8 +136,9 @@ function groupPath(id) {
   for (let group = groups.find(item => item.id === id); group; group = groups.find(item => item.id === group.parentId)) names.unshift(group.name);
   return names.join(' / ') || '미분류';
 }
+function compareGroupOrder(a, b) { return (a.treeOrder ?? Infinity) - (b.treeOrder ?? Infinity) || a.name.localeCompare(b.name, 'ko') || a.id - b.id; }
 function orderedGroups(parentId = null, depth = 0) {
-  return groups.filter(group => group.parentId === parentId).sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id - b.id).flatMap(group => [{ ...group, depth }, ...orderedGroups(group.id, depth + 1)]);
+  return groups.filter(group => group.parentId === parentId).sort(compareGroupOrder).flatMap(group => [{ ...group, depth }, ...orderedGroups(group.id, depth + 1)]);
 }
 function groupOptions(emptyLabel, excludedId = null) {
   const excluded = new Set(excludedId ? [excludedId] : []);
@@ -140,16 +150,16 @@ function groupOptions(emptyLabel, excludedId = null) {
 function renderTree(shown) {
   const filtering = isFiltering();
   function branch(group, depth) {
-    const children = groups.filter(item => group.id !== null && item.parentId === group.id).sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id - b.id).map(child => branch(child, depth + 1));
-    const members = shown.filter(site => site.groupId === group.id);
+    const children = groups.filter(item => group.id !== null && item.parentId === group.id).sort(compareGroupOrder).map(child => branch(child, depth + 1));
+    const members = shown.filter(site => site.groupId === group.id).sort(compareSiteOrder);
     const count = members.length + children.reduce((sum, child) => sum + child.count, 0);
     if (filtering && !count) return { count: 0, html: '' };
     const open = filtering || !collapsedGroups.has(group.id);
-    return { count, html: `<li class="navigation-group ${depth ? 'nested-group' : 'root-group'}"><div class="navigation-group-heading"><button class="navigation-chevron" data-nav="toggle" data-id="${group.id ?? ''}" aria-label="${escapeHtml(group.name)} ${open ? '접기' : '펼치기'}" aria-expanded="${open}" ${filtering ? 'disabled' : ''}>${open ? '▾' : '▸'}</button><button class="navigation-label" data-nav="group" data-id="${group.id ?? ''}" aria-current="${directoryScope.type === 'group' && directoryScope.id === group.id}"><span>${escapeHtml(group.name)}</span><small>${count}</small></button></div>${open ? `<ul>${children.map(child => child.html).join('')}${members.map(site => `<li><button class="navigation-system" data-nav="system" data-id="${site.id}" aria-current="${directoryScope.type === 'system' && directoryScope.id === site.id}"><span class="navigation-system-dot" aria-hidden="true"></span><span>${escapeHtml(site.systemName)}</span></button></li>`).join('')}${!count && !children.length ? '<li class="navigation-empty">등록된 시스템 없음</li>' : ''}</ul>` : ''}</li>` };
+    return { count, html: `<li class="navigation-group ${depth ? 'nested-group' : 'root-group'}"><div class="navigation-group-heading"><button class="navigation-chevron" data-nav="toggle" data-id="${group.id ?? ''}" aria-label="${escapeHtml(group.name)} ${open ? '접기' : '펼치기'}" aria-expanded="${open}" ${filtering ? 'disabled' : ''}>${open ? '▾' : '▸'}</button><button class="navigation-label" ${group.id === null ? '' : 'draggable="true" title="위·아래에 놓아 순서 변경, 가운데에 놓아 하위 그룹으로 이동 · Alt+↑/↓"'} data-nav="group" data-id="${group.id ?? ''}" aria-current="${directoryScope.type === 'group' && directoryScope.id === group.id}"><span>${escapeHtml(group.name)}</span><small>${count}</small></button></div>${open ? `<ul>${children.map(child => child.html).join('')}${members.map(site => `<li><button class="navigation-system" draggable="true" title="드래그하여 이동 · Alt+↑/↓로 순서 변경" data-nav="system" data-id="${site.id}" aria-current="${directoryScope.type === 'system' && directoryScope.id === site.id}"><span class="navigation-system-dot" aria-hidden="true"></span><span>${escapeHtml(site.systemName)}</span></button></li>`).join('')}${!count && !children.length ? '<li class="navigation-empty">등록된 시스템 없음</li>' : ''}</ul>` : ''}</li>` };
   }
-  const roots = groups.filter(group => group.parentId === null).sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id - b.id);
+  const roots = groups.filter(group => group.parentId === null).sort(compareGroupOrder);
   let html = roots.map(group => branch(group, 0).html).join('');
-  if (sites.some(site => !site.deletedAt && site.groupId === null) || directoryScope.type === 'group' && directoryScope.id === null) html += branch({ id: null, name: '미분류' }, 0).html;
+  html += branch({ id: null, name: '미분류' }, 0).html;
   $('group-tree').innerHTML = html || '<li class="navigation-empty">표시할 그룹이 없습니다.</li>';
   $('collapse-groups').disabled = filtering;
 }
@@ -172,7 +182,7 @@ function openEditor(site = null) {
   $('editor-title').textContent = site ? '시스템 수정' : '시스템 추가';
   const data = site ?? { externalAccess: 'unknown', groupId: directoryScope.type === 'group' ? directoryScope.id : sites.find(item => item.id === selectedSiteId)?.groupId ?? null };
   $('groupId').innerHTML = groupOptions('미분류');
-  for (const field of Object.keys(labels).filter(field => !['deleted', 'components'].includes(field))) $(field).value = data[field] ?? '';
+  for (const field of Object.keys(labels).filter(field => !['deleted', 'components', 'position'].includes(field))) $(field).value = data[field] ?? '';
   $('component-editors').replaceChildren();
   for (const component of data.components ?? []) addComponentEditor(component);
   $('components-empty').hidden = Boolean(data.components?.length);
@@ -254,7 +264,7 @@ function historyValue(field, value, reveal, snapshot) {
 function renderHistory(reveal = false) {
   $('history-content').innerHTML = histories.map(event => {
     const changes = Object.keys(labels).filter(field => field === 'components' ? JSON.stringify(event.before?.components ?? []) !== JSON.stringify(event.after.components ?? []) : event.before ? (event.before[field] ?? null) !== (event.after[field] ?? null) : event.after[field] != null && event.after[field] !== '' && field !== 'deleted');
-    return `<article class="history-item"><div class="history-head"><span class="action-badge ${event.action}">${({ create: '추가', update: '수정', delete: '삭제' })[event.action]}</span><strong>${escapeHtml(formatActor(event.actor, event.actorJobTitle))}</strong><time datetime="${event.changedAt}">${formatDate(event.changedAt)}</time></div><div class="change-list">${changes.map(field => `<div class="change-row"><span class="change-label">${labels[field]}</span><span class="change-value change-before">${historyValue(field, event.before?.[field], reveal, event.before)}</span><span class="change-arrow" aria-label="변경 후">→</span><span class="change-value change-after">${historyValue(field, event.after[field], reveal, event.after)}</span></div>`).join('')}</div><div class="backup-caption">${event.backupFile ? '변경 전 백업 완료' : '최초 데이터 등록'}</div></article>`;
+    return `<article class="history-item"><div class="history-head"><span class="action-badge ${event.action}">${({ create: '추가', update: '수정', delete: '삭제', move: '이동' })[event.action]}</span><strong>${escapeHtml(formatActor(event.actor, event.actorJobTitle))}</strong><time datetime="${event.changedAt}">${formatDate(event.changedAt)}</time></div><div class="change-list">${changes.map(field => `<div class="change-row"><span class="change-label">${labels[field]}</span><span class="change-value change-before">${historyValue(field, event.before?.[field], reveal, event.before)}</span><span class="change-arrow" aria-label="변경 후">→</span><span class="change-value change-after">${historyValue(field, event.after[field], reveal, event.after)}</span></div>`).join('')}</div><div class="backup-caption">${event.backupFile ? '변경 전 백업 완료' : '최초 데이터 등록'}</div></article>`;
   }).join('') || '<p class="muted">변경 기록이 없습니다.</p>';
   if (histories.some(event => [event.before, event.after].some(snapshot => snapshot && [snapshot, ...(snapshot.components ?? [])].some(item => item.commonAccount || item.serverAccount)))) {
     const button = document.createElement('button'); button.className = 'button secondary history-secret'; button.textContent = reveal ? '기록의 계정 정보 숨기기' : '기록의 계정 정보 보기'; button.setAttribute('aria-pressed', String(reveal)); button.addEventListener('click', () => renderHistory(!reveal)); $('history-content').append(button);
@@ -264,12 +274,137 @@ function setAuthMode(register) {
   registerMode = register; errorAt('auth-error'); $('auth-form').reset();
   $('login-tab').classList.toggle('selected', !register); $('register-tab').classList.toggle('selected', register);
   $('login-tab').setAttribute('aria-pressed', String(!register)); $('register-tab').setAttribute('aria-pressed', String(register));
-  $('auth-title').textContent = register ? '함께 사용할 계정을 만드세요' : '반가워요, 시작해 볼까요?';
-  $('auth-description').textContent = register ? '아이디, 이름, 직급과 비밀번호를 입력해 주세요.' : '아이디와 비밀번호로 로그인해 주세요.';
+  $('auth-title').hidden = !register;
+  $('auth-description').hidden = !register;
   $('auth-submit').textContent = register ? '계정 만들고 시작하기 →' : '로그인 →'; $('password-confirm-wrap').hidden = !register; $('auth-confirm').required = register;
   $('register-details').hidden = !register; $('auth-name').required = register; $('auth-job-title').required = register;
   $('auth-password').autocomplete = register ? 'new-password' : 'current-password';
 }
+function clearDropTarget() {
+  $('directory-navigation').querySelectorAll('[data-drop-position]').forEach(element => element.removeAttribute('data-drop-position'));
+}
+function treeDropTarget(event) {
+  if (draggingGroup) {
+    if (event.target.closest('#group-root-drop')) return { element: $('group-root-drop'), parentId: null };
+    const heading = event.target.closest('.navigation-group-heading');
+    const button = heading?.querySelector('[data-nav="group"]');
+    const target = groups.find(group => group.id === Number(button?.dataset.id));
+    if (!target || target.id === draggingGroup.id) return null;
+    const bounds = heading.getBoundingClientRect();
+    const position = (event.clientY - bounds.top) / bounds.height;
+    const placement = position < .25 ? 'before' : position > .75 ? 'after' : 'inside';
+    const parentId = placement === 'inside' ? target.id : target.parentId;
+    for (let parent = groups.find(group => group.id === parentId); parent; parent = groups.find(group => group.id === parent.parentId)) {
+      if (parent.id === draggingGroup.id) return null;
+    }
+    return { element: heading, parentId, targetId: placement === 'inside' ? null : target.id, targetVersion: target.version, placement };
+  }
+  const system = event.target.closest('[data-nav="system"]');
+  if (system) {
+    const target = sites.find(site => site.id === Number(system.dataset.id));
+    if (!target || target.id === draggingSite?.id) return null;
+    const bounds = system.getBoundingClientRect();
+    return { element: system, groupId: target.groupId, targetId: target.id, targetVersion: target.version, placement: event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after' };
+  }
+  const group = event.target.closest('.navigation-group-heading')?.querySelector('[data-nav="group"]');
+  return group ? { element: group.closest('.navigation-group-heading'), groupId: group.dataset.id ? Number(group.dataset.id) : null } : null;
+}
+async function moveSystem(site, target) {
+  if (movingTree) return;
+  movingTree = true; $('group-tree').setAttribute('aria-busy', 'true');
+  try {
+    const { site: moved, changed } = await api(`/api/sites/${site.id}/move`, { method: 'PUT', body: { version: site.version, groupId: target.groupId, targetId: target.targetId ?? null, targetVersion: target.targetVersion, placement: target.placement } });
+    if (!currentUser) return;
+    directoryScope = { type: 'group', id: moved.groupId }; selectedSiteId = moved.id;
+    collapsedGroups.delete(moved.groupId);
+    for (let group = groups.find(item => item.id === moved.groupId); group; group = groups.find(item => item.id === group.parentId)) collapsedGroups.delete(group.id);
+    await loadSites();
+    $('group-tree').querySelector(`[data-nav="system"][data-id="${moved.id}"]`)?.focus();
+    toast(changed ? '시스템을 이동하고 변경 기록을 저장했습니다.' : '이미 같은 위치에 있습니다.');
+  } catch (error) {
+    if (currentUser) await loadSites();
+    toast(error.message);
+  } finally { movingTree = false; $('group-tree').removeAttribute('aria-busy'); }
+}
+async function moveGroup(group, target) {
+  if (movingTree) return;
+  movingTree = true; $('group-tree').setAttribute('aria-busy', 'true');
+  try {
+    const result = await api(`/api/groups/${group.id}/move`, { method: 'PUT', body: { version: group.version, parentId: target.parentId, parentVersion: groups.find(item => item.id === target.parentId)?.version, targetId: target.targetId ?? null, targetVersion: target.targetVersion, placement: target.placement } });
+    if (!currentUser) return;
+    directoryScope = { type: 'group', id: result.group.id }; selectedSiteId = null;
+    if (await loadSites()) {
+      for (let parent = groups.find(item => item.id === result.group.id); parent; parent = groups.find(item => item.id === parent.parentId)) collapsedGroups.delete(parent.id);
+      render();
+      $('group-tree').querySelector(`[data-nav="group"][data-id="${result.group.id}"]`)?.focus();
+    }
+    toast(result.changed ? '그룹의 순서와 위치를 저장했습니다.' : '이미 같은 위치에 있습니다.');
+  } catch (error) {
+    if (currentUser) await loadSites();
+    toast(error.message);
+  } finally { movingTree = false; $('group-tree').removeAttribute('aria-busy'); }
+}
+$('directory-navigation').addEventListener('dragstart', event => {
+  const button = event.target.closest('[draggable="true"]');
+  if (!button || movingTree) { event.preventDefault(); return; }
+  draggingGroup = button.dataset.nav === 'group' ? groups.find(group => group.id === Number(button.dataset.id)) : null;
+  draggingSite = button.dataset.nav === 'system' ? sites.find(site => site.id === Number(button.dataset.id)) : null;
+  $('group-root-drop').hidden = !draggingGroup;
+  event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `${button.dataset.nav}:${button.dataset.id}`);
+  button.classList.add('dragging');
+});
+$('directory-navigation').addEventListener('dragover', event => {
+  if ((!draggingSite && !draggingGroup) || movingTree) return;
+  clearDropTarget();
+  const target = treeDropTarget(event); if (!target) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+  target.element.dataset.dropPosition = target.placement === 'inside' ? 'group' : target.placement ?? 'group';
+});
+$('directory-navigation').addEventListener('dragleave', event => { if (!$('directory-navigation').contains(event.relatedTarget)) clearDropTarget(); });
+$('directory-navigation').addEventListener('drop', event => {
+  if ((!draggingSite && !draggingGroup) || movingTree) return;
+  const target = treeDropTarget(event); const site = draggingSite; const group = draggingGroup;
+  event.preventDefault(); clearDropTarget(); draggingSite = null; draggingGroup = null; $('group-root-drop').hidden = true;
+  if (target) group ? moveGroup(group, target) : moveSystem(site, target);
+});
+$('directory-navigation').addEventListener('dragend', () => {
+  draggingSite = null; draggingGroup = null; $('group-root-drop').hidden = true; clearDropTarget();
+  $('group-tree').querySelectorAll('.dragging').forEach(element => element.classList.remove('dragging'));
+});
+$('directory-navigation').addEventListener('keydown', event => {
+  if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+  const groupButton = event.target.closest('[data-nav="group"][draggable="true"]');
+  if (groupButton) {
+    event.preventDefault();
+    const group = groups.find(item => item.id === Number(groupButton.dataset.id));
+    const siblings = groups.filter(item => item.parentId === group.parentId).sort(compareGroupOrder);
+    const target = siblings[siblings.findIndex(item => item.id === group.id) + (event.key === 'ArrowUp' ? -1 : 1)];
+    if (target) moveGroup(group, { parentId: target.parentId, targetId: target.id, targetVersion: target.version, placement: event.key === 'ArrowUp' ? 'before' : 'after' });
+    return;
+  }
+  const button = event.target.closest('[data-nav="system"]'); if (!button) return;
+  event.preventDefault();
+  const site = sites.find(item => item.id === Number(button.dataset.id));
+  const members = sites.filter(item => !item.deletedAt && item.groupId === site.groupId).sort(compareSiteOrder);
+  const target = members[members.findIndex(item => item.id === site.id) + (event.key === 'ArrowUp' ? -1 : 1)];
+  if (target) moveSystem(site, { groupId: target.groupId, targetId: target.id, targetVersion: target.version, placement: event.key === 'ArrowUp' ? 'before' : 'after' });
+});
+$('edit-profile').addEventListener('click', () => {
+  errorAt('profile-error'); $('profile-username').value = currentUser.username;
+  $('profile-name').value = currentUser.name; $('profile-job-title').value = currentUser.jobTitle;
+  $('profile-dialog').showModal(); $('profile-name').focus();
+});
+$('profile-form').addEventListener('submit', async event => {
+  event.preventDefault(); errorAt('profile-error'); $('save-profile').disabled = true;
+  try {
+    const result = await api('/api/me', { method: 'PUT', body: { name: $('profile-name').value, jobTitle: $('profile-job-title').value } });
+    if (!currentUser) return;
+    renderUser(result.user); $('profile-dialog').close(); await loadSites();
+    toast(result.changed ? '계정 정보를 변경했습니다.' : '변경된 내용이 없습니다.');
+  } catch (error) { errorAt('profile-error', error.message); }
+  finally { $('save-profile').disabled = false; }
+});
+$('add-group-site').addEventListener('click', () => openEditor());
 $('manage-groups').addEventListener('click', () => { renderGroupList(); editGroup(); $('group-dialog').showModal(); $('group-name').focus(); });
 $('new-group').addEventListener('click', () => { editGroup(); $('group-name').focus(); });
 $('refresh-groups').addEventListener('click', async () => { if (await loadSites()) editGroup(); });

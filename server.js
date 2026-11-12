@@ -4,7 +4,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { createStore, HttpError } from './lib/store.js';
+import { createStore, HttpError, validateProfile } from './lib/store.js';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const scrypt = promisify(scryptCallback);
@@ -116,10 +116,7 @@ export function createApp(options = {}) {
         if (typeof password !== 'string' || password.length > 128 || !password.trim()) throw new HttpError(400, '비밀번호는 공백만 사용하지 않고 1~128자로 입력해 주세요.');
         let user;
         if (pathname === '/api/register') {
-          const name = typeof body.name === 'string' ? body.name.normalize('NFKC').trim() : '';
-          const jobTitle = typeof body.jobTitle === 'string' ? body.jobTitle.normalize('NFKC').trim() : '';
-          if (name.length < 2 || name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new HttpError(400, '이름은 2~40자로 입력해 주세요.');
-          if (!jobTitle || jobTitle.length > 40 || /[\p{Cc}\p{Cf}]/u.test(jobTitle)) throw new HttpError(400, '직급은 1~40자로 입력해 주세요.');
+          const { name, jobTitle } = validateProfile(body);
           user = await store.createUser({ username, name, jobTitle }, await hashPassword(password));
         } else {
           const found = store.db.prepare('SELECT * FROM users WHERE username = ?').get(username);
@@ -132,6 +129,7 @@ export function createApp(options = {}) {
       }
       const user = userFrom(req);
       if (!user) throw new HttpError(401, '로그인이 필요합니다. 다시 로그인해 주세요.');
+      if (pathname === '/api/me' && req.method === 'PUT') return json(res, 200, await store.updateProfile(user.id, await readJson(req)));
       if (pathname === '/api/logout' && req.method === 'POST') {
         store.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(digest(tokenFrom(req)));
         res.setHeader('Set-Cookie', `devsites_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookie ? '; Secure' : ''}`);
@@ -141,17 +139,22 @@ export function createApp(options = {}) {
       if (pathname === '/api/sites' && req.method === 'POST') return json(res, 201, await store.mutate('create', null, await readJson(req), user));
       if (pathname === '/api/groups' && req.method === 'GET') return json(res, 200, { groups: store.listGroups() });
       if (pathname === '/api/groups' && req.method === 'POST') return json(res, 201, await store.mutateGroup('create', null, await readJson(req)));
-      const groupMatch = pathname.match(/^\/api\/groups\/(\d+)$/);
+      const groupMatch = pathname.match(/^\/api\/groups\/(\d+)(\/move)?$/);
       if (groupMatch && ['PUT', 'DELETE'].includes(req.method)) {
         const id = Number(groupMatch[1]);
         if (!Number.isSafeInteger(id)) throw new HttpError(404, '그룹을 찾을 수 없습니다.');
+        if (groupMatch[2]) {
+          if (req.method !== 'PUT') throw new HttpError(405, '지원하지 않는 요청입니다.');
+          return json(res, 200, await store.moveGroup(id, await readJson(req)));
+        }
         return json(res, 200, await store.mutateGroup(req.method === 'PUT' ? 'update' : 'delete', id, await readJson(req)));
       }
-      const match = pathname.match(/^\/api\/sites\/(\d+)(\/history|\/permanent)?$/);
+      const match = pathname.match(/^\/api\/sites\/(\d+)(\/history|\/permanent|\/move)?$/);
       if (match) {
         const id = Number(match[1]);
         if (!Number.isSafeInteger(id)) throw new HttpError(404, '항목을 찾을 수 없습니다.');
         if (match[2] === '/history' && req.method === 'GET') return json(res, 200, { history: store.history(id) });
+        if (match[2] === '/move' && req.method === 'PUT') return json(res, 200, await store.moveSite(id, await readJson(req), user));
         if (match[2] === '/permanent' && req.method === 'DELETE') return json(res, 200, await store.permanentlyDelete(id, await readJson(req)));
         if (!match[2] && ['PUT', 'DELETE'].includes(req.method)) {
           return json(res, 200, await store.mutate(req.method === 'PUT' ? 'update' : 'delete', id, await readJson(req), user));

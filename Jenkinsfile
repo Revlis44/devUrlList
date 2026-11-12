@@ -46,7 +46,7 @@ pipeline {
         container('buildkit') {
           sh '''
             set -eu
-            if [ "$PUSH_IMAGE" = "true" ]; then
+            if [ "${PUSH_IMAGE:-false}" = "true" ]; then
               test -s /home/user/.docker/config.json
               output="type=image,name=$IMAGE_REPOSITORY:$IMAGE_TAG,push=true"
             else

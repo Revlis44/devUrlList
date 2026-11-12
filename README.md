@@ -4,6 +4,8 @@
 
 프로젝트명과 폴더명은 `devUrlList`입니다. 소스 저장소는 [Revlis44/devUrlList](https://github.com/Revlis44/devUrlList)입니다.
 
+최종 HTTPS 접속 주소는 `https://devurl.intra.sayinfo.co.kr`입니다. Harbor 프로젝트와 Kubernetes 네임스페이스 이름은 `devurllist`이며, 접속 도메인의 `devurl`과 구분합니다.
+
 ## 실행
 
 Node.js **24 이상**을 설치한 뒤 저장소를 내려받아 실행합니다.
@@ -28,7 +30,7 @@ HOST=0.0.0.0 PORT=3000 npm start
 
 ```sh
 HOST=127.0.0.1 PORT=3000 \
-APP_ORIGIN=https://servers.example.com COOKIE_SECURE=true \
+APP_ORIGIN=https://devurl.intra.sayinfo.co.kr COOKIE_SECURE=true \
 node server.js
 ```
 
@@ -77,13 +79,13 @@ cd /data/devurllist/compose
 | `APP_PORT` | `8188` | 서버에서 공개할 HTTP 포트 |
 | `BIND_IP` | `0.0.0.0` | 접속을 받을 서버 IP. 같은 서버의 HTTPS 프록시만 사용하면 `127.0.0.1`로 변경 |
 | `APP_UID`, `APP_GID` | 설치 실행 사용자 기준 | SQLite·로그·백업 파일의 소유자와 컨테이너 실행 사용자 |
-| `APP_ORIGIN` | 빈 값 | 빈 값이면 현재 요청 주소를 사용합니다. HTTPS 프록시를 사용할 때는 브라우저의 최종 주소를 지정합니다. 예: `https://servers.example.com` |
+| `APP_ORIGIN` | 빈 값 | 빈 값이면 현재 요청 주소를 사용합니다. 최종 HTTPS 접속 주소는 `https://devurl.intra.sayinfo.co.kr`로 지정합니다. |
 | `COOKIE_SECURE` | `false` | HTTPS 프록시를 사용할 때 `true`로 변경 |
 
 HTTPS 주소에서 로그인할 때 **“요청 출처를 확인할 수 없습니다”**가 표시되면 `/data/devurllist/compose/.env`에 아래 두 값을 설정합니다. `APP_ORIGIN`은 실제 브라우저 주소와 프로토콜·도메인·포트가 일치해야 하며, 경로와 끝 슬래시는 제외합니다.
 
 ```dotenv
-APP_ORIGIN=https://servers.example.com
+APP_ORIGIN=https://devurl.intra.sayinfo.co.kr
 COOKIE_SECURE=true
 ```
 
@@ -220,7 +222,17 @@ SQLite 백업 구현은 [Node.js 24 SQLite 문서](https://nodejs.org/download/r
 
 ## Rancher MariaDB 배포 준비
 
-2026-11-11 기준 소스와 설정 파일 준비 단계입니다. 아래 명령은 이후 운영자가 환경과 이전 결과를 확인한 뒤 실행하는 절차이며, 파일 작성만으로 Rancher·Jenkins·Harbor가 변경되지는 않습니다.
+2026-11-12 기준 소스와 설정 파일입니다. 아래 명령은 운영자가 환경과 이전 결과를 확인한 뒤 실행하는 절차이며, 파일 작성·커밋·푸시만으로 운영 환경에 적용되었음을 의미하지 않습니다.
+
+접속 주소와 배포 후 검증 대상은 모두 `https://devurl.intra.sayinfo.co.kr`로 통일합니다.
+
+| 항목 | 설정 파일 | 확정 값 |
+|---|---|---|
+| 로그인·변경 요청의 허용 주소 | `k8s/app.yaml`의 `APP_ORIGIN` | `https://devurl.intra.sayinfo.co.kr` |
+| HTTPS 전용 세션 쿠키 | `k8s/app.yaml`의 `COOKIE_SECURE` | `"true"` |
+| 접속 전환 후 외부 검증 주소 | `scripts/deploy-k8s.sh`의 `VERIFY_PUBLIC=true` 분기 | `https://devurl.intra.sayinfo.co.kr` |
+
+기존 Traefik의 도메인·TLS 설정을 사용하며, `k8s/cutover/`는 데이터 이전과 앱 검증 후 기존 라우팅의 연결 대상을 새 서비스로 전환할 때만 적용합니다. `k8s/bootstrap/network-policy.yaml`의 `Ingress`는 앱·DB로 들어오는 통신 허용 규칙으로, 도메인 라우팅을 생성하거나 변경하지 않습니다.
 
 앱은 `devurllist` 네임스페이스에서 2개로 실행하고, MariaDB 11.4.8 StatefulSet 1개와 Ceph RBD 10Gi를 공유합니다. 앱 변경 전 백업은 별도 CephFS RWX 10Gi에 보관합니다. 자원 요청·상한·용량은 초기값이며 실제 데이터와 부하에 맞게 조정합니다. DB는 단일 인스턴스이므로 DB 재시작·장애 시에는 서비스 영향이 있습니다. 앱의 RollingUpdate와 DB 고가용성은 별개입니다.
 

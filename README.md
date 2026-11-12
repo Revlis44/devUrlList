@@ -1,6 +1,6 @@
 # devUrlList
 
-사내 개발서버의 주소, 접속 계정, IP와 포트를 함께 관리하는 웹페이지입니다. HTML/CSS/JavaScript 화면과 Node.js 서버, SQLite를 사용하며 외부 패키지나 빌드 과정이 필요하지 않습니다.
+사내 개발서버의 주소, 접속 계정, IP와 포트를 함께 관리하는 웹페이지입니다. HTML/CSS/JavaScript 화면과 Node.js 서버를 사용합니다. 기본 SQLite 실행에는 외부 패키지가 필요하지 않으며, Rancher용 MariaDB 실행은 `npm ci`로 고정된 드라이버를 설치합니다.
 
 프로젝트명과 폴더명은 `devUrlList`입니다. 소스 저장소는 [Revlis44/devUrlList](https://github.com/Revlis44/devUrlList)입니다.
 
@@ -16,7 +16,7 @@ npm start
 
 기본 주소는 `http://127.0.0.1:3000`입니다. 로그인 화면의 **계정 만들기**에서 아이디(공백 없이 1~40자), 이름(2~40자), 직급(직접 입력, 1~40자), 비밀번호(1~128자)를 입력합니다. 로그인은 아이디와 비밀번호를 사용하며, 로그인 후 상단에 이름·아이디·직급을 표시합니다. 아이디는 영문 대소문자를 구분하지 않고 중복을 확인합니다. 비밀번호는 8자 미만도 사용할 수 있으며, 빈 값이나 공백만으로는 설정할 수 없습니다. 기본 관리자나 공용 로그인 계정은 없으며, 가입한 모든 사용자가 동일하게 목록을 추가·수정·삭제할 수 있습니다. 같은 이름은 중복 가입할 수 없습니다.
 
-기존 계정이 없는 설치 환경을 기준으로 하며, 서버를 시작하면 기존 DB의 사용자 테이블에 아이디·직급 항목을 추가합니다. 등록된 서버 목록과 변경 기록은 유지됩니다.
+SQLite 실행은 서버 시작 시 기존 DB의 사용자 테이블에 아이디·직급 항목을 추가하며 등록된 서버 목록과 변경 기록을 유지합니다. MariaDB 실행은 별도의 스키마 작업과 데이터 이전을 먼저 완료해야 하며, 예시 데이터를 자동 생성하지 않습니다.
 
 다른 사내 PC에서 접근하도록 실행하려면 다음과 같이 지정합니다.
 
@@ -32,11 +32,11 @@ APP_ORIGIN=https://servers.example.com COOKIE_SECURE=true \
 node server.js
 ```
 
-HTTP로 접속할 때는 `COOKIE_SECURE=true`를 사용하지 않습니다. `.env` 자동 로딩은 없으며 환경변수를 직접 설정하거나 Node의 `--env-file` 옵션을 사용할 수 있습니다. 배포 시 Node 프로세스 하나를 서비스 관리 도구(systemd 등)에 등록하고 자동 재시작을 설정하세요. 한 DB에 여러 프로세스를 동시에 연결하지 않습니다.
+HTTP로 접속할 때는 `COOKIE_SECURE=true`를 사용하지 않습니다. `.env` 자동 로딩은 없으며 환경변수를 직접 설정하거나 Node의 `--env-file` 옵션을 사용할 수 있습니다. SQLite 배포는 Node 프로세스 하나만 연결합니다. MariaDB 배포는 아래 Rancher 구성처럼 여러 앱이 같은 DB를 사용합니다.
 
 ## Docker 실행
 
-Linux 서버의 기본 설치 경로를 `/data/devurllist`로 사용합니다. 설치 스크립트에 다른 경로를 전달해도 됩니다. Docker Engine과 Docker Compose v2 이상이 필요하며, 서버에 Node.js를 별도로 설치할 필요는 없습니다. 의존 패키지가 없어 `node:24-bookworm-slim` 공식 이미지에서 소스를 직접 실행합니다.
+기존 SQLite Docker 실행 방식입니다. Linux 서버의 기본 설치 경로는 `/data/devurllist`이며 설치 스크립트에 다른 경로를 전달할 수 있습니다. Docker Engine과 Docker Compose v2 이상이 필요합니다. SQLite 경로는 의존 패키지 없이 `node:24-bookworm-slim` 공식 이미지에서 실행합니다. MariaDB용 이미지는 루트의 `Dockerfile`로 빌드합니다.
 
 ```text
 /data/devurllist/
@@ -217,3 +217,126 @@ test/docker.test.js 설치·로그·배치 경로 통합 검증
 CSS·JavaScript URL에는 `?ver=yyyyMMdd` 캐시 버전을 적용합니다. 같은 날짜에 다시 변경하면 `_N`을 붙입니다. 화면 작업 전후 캡처는 프로젝트의 `frontDiff/`에 보관합니다.
 
 SQLite 백업 구현은 [Node.js 24 SQLite 문서](https://nodejs.org/download/release/v24.22.1/docs/api/sqlite.html#sqlitebackupsourceDb-path-options)를 참고했습니다.
+
+## Rancher MariaDB 배포 준비
+
+2026-11-11 기준 소스와 설정 파일 준비 단계입니다. 아래 명령은 이후 운영자가 환경과 이전 결과를 확인한 뒤 실행하는 절차이며, 파일 작성만으로 Rancher·Jenkins·Harbor가 변경되지는 않습니다.
+
+앱은 `devurllist` 네임스페이스에서 2개로 실행하고, MariaDB 11.4.8 StatefulSet 1개와 Ceph RBD 10Gi를 공유합니다. 앱 변경 전 백업은 별도 CephFS RWX 10Gi에 보관합니다. 자원 요청·상한·용량은 초기값이며 실제 데이터와 부하에 맞게 조정합니다. DB는 단일 인스턴스이므로 DB 재시작·장애 시에는 서비스 영향이 있습니다. 앱의 RollingUpdate와 DB 고가용성은 별개입니다.
+
+### 소스 및 파일 역할
+
+| 파일 | 역할 |
+|---|---|
+| `lib/mariadb.js`, `lib/mariadb-store.js` | 연결 풀, DB 공통 잠금, 저장·세션·변경 전 백업 |
+| `lib/mariadb-migration.js`, `db/migrations/001-initial.sql` | 스키마 적용과 SQLite/JSON 백업 이전·검증 |
+| `lib/client-address.js` | 명시적으로 신뢰한 프록시의 접속 IP만 사용 |
+| `Dockerfile`, `.dockerignore` | 실행 파일만 포함하는 비관리자 이미지 |
+| `Jenkinsfile`, `k8s/jenkins-agent.yaml` | 테스트, BuildKit 빌드, Harbor 업로드, 앱 순차 교체 |
+| `k8s/bootstrap/` | 최초 Namespace·DB·스토리지·권한·통신 범위 구성 |
+| `k8s/app.yaml`, `k8s/migration-job.yaml` | 앱과 단일 스키마 작업 템플릿 |
+| `k8s/cutover/` | 최초 접속 경로 전환용. Jenkins 자동 배포에서 제외 |
+| `scripts/render-k8s.js`, `scripts/prepare-release.js` | 빌드 digest로 템플릿 확정 |
+| `scripts/deploy-k8s.sh`, `scripts/prepare-rollback.js`, `scripts/smoke.js` | 배포, 이전 설정 복귀, 서비스 확인 |
+
+### MariaDB 실행과 보존 조건
+
+`DB_CLIENT=mariadb`와 `DB_HOST`, `DB_PORT`(기본 3306), `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `BACKUP_DIR`를 설정합니다. 연결 풀은 앱당 최대 5개로, 배포 중 3개 앱과 스키마·운영 연결의 여유를 DB에 확보합니다. 앱 계정은 SELECT/INSERT/UPDATE/DELETE, 별도 migrator 계정은 해당 DB의 DDL 권한을 갖습니다. 스키마 변경은 앱 시작 시 수행하지 않습니다.
+
+사용자·비밀번호 해시·유효 세션·JSON 원문·ID·그룹 계층·이력을 이전합니다. SQLite NOCASE와 동일하게 ASCII 영문만 접은 이진 키로 중복을 검사합니다. 그룹의 삭제 이력에 따른 자동 증가 번호도 보존합니다. `createApp()`은 비동기 함수로 변경되어 호출부에서 `await`가 필요합니다.
+
+업무 변경은 DB 이름별 공통 잠금으로 여러 앱 사이에서도 직렬화합니다. 입력과 버전을 검사한 다음, InnoDB의 일관된 읽기로 전체 앱 테이블을 JSON 백업하고 파일 동기화·이름 변경이 성공한 뒤 데이터와 이력을 트랜잭션으로 저장합니다. 백업 실패 시 503으로 중단하며 무변경 저장에는 백업을 만들지 않습니다. 로그인·로그아웃은 기존처럼 변경 전 백업 대상이 아닙니다. 이 방식은 소규모 목록에 맞춘 것으로, 데이터가 커지면 매 변경마다 전체 백업하는 비용을 재검토해야 합니다.
+
+백업 파일은 0600이며 웹으로 제공하지 않습니다. 복원은 스키마를 적용한 **빈 DB에만** `scripts/import-mariadb.js --backup ...`으로 수행합니다. 기존 DB에 데이터를 덮어쓰지 않으며 자동 삭제·보존 기간 정책도 추가하지 않았습니다. Ceph 내 백업은 클러스터 전체 장애에 대한 독립 백업이 아니므로 외부 저장소 복사, 용량 알림, 정기 백업과 복원 훈련은 운영 준비 항목으로 남아 있습니다.
+
+`READ_ONLY=true`는 조회와 기존 세션 사용은 허용하면서 로그인·로그아웃·가입·모든 변경 API를 503으로 차단합니다. 최초 데이터 이전 시 기존 SQLite 서비스에 사용합니다. `/livez`는 프로세스, `/readyz`는 스키마·초기화 상태·DB 응답을 검사합니다. SIGTERM은 새 연결 수락을 중단하고 진행 중 요청·DB 연결을 정리하며, Kubernetes 종료 유예는 45초입니다.
+
+`TRUST_PROXY_CIDRS`는 기본 빈 값으로 전달 헤더를 신뢰하지 않습니다. 배포 전 Traefik의 실제 접속 소스 범위를 확인하여 해당 CIDR만 지정합니다. 비워 두면 로그인 제한이 프록시 IP 단위로 합산될 수 있습니다. 아무 IP나 신뢰하는 범위를 넣지 않습니다. NetworkPolicy는 앱 접근을 traefik/jenkins 네임스페이스, DB 접근을 앱/이전 Pod로 제한합니다. CNI 정책 적용과 실제 프록시 경로는 배포 전 확인해야 합니다.
+
+### 최초 기반 준비 — 운영 반영 전 별도 실행
+
+1. 실제 Kubernetes context가 `dev-rke2`인지 확인합니다. `rook-ceph-block`과 `rook-cephfs` 상태·여유 공간, 노드 분산 배치 가능 여부를 확인합니다.
+2. Harbor에 비공개 `devurllist` 프로젝트와 `devurllist` 저장소용 로봇 계정을 준비합니다. 빌드용 계정은 Pull/Push, 실행용 계정은 Pull만 허용합니다. 릴리스 태그 덮어쓰기를 제한하고 이전 정상 이미지를 보존합니다. 불변 태그는 삭제도 제한하므로 정리 정책과 함께 결정합니다.
+3. `k8s/bootstrap/namespace.yaml`을 적용한 후 아래 Secret을 준비합니다. 실제 값은 저장소·Jenkinsfile·이미지에 넣지 않습니다.
+
+| 네임스페이스 | Secret 이름 | 키/형식 |
+|---|---|---|
+| devurllist | devurllist-db | `DB_PASSWORD`: 앱 계정 |
+| devurllist | devurllist-db-migration | `DB_PASSWORD`: migrator 계정 |
+| devurllist | devurllist-db-root | `password`: MariaDB root |
+| devurllist | devurllist-harbor-pull | kubernetes.io/dockerconfigjson |
+| jenkins | devurllist-harbor-push | kubernetes.io/dockerconfigjson |
+
+예를 들어 권한 0600의 안전한 로컬 파일에서 Secret을 생성합니다. 아래 경로는 실제 파일 경로로 바꾸며 실제 비밀번호를 명령행에 직접 쓰지 않습니다.
+
+```sh
+kubectl apply -f k8s/bootstrap/namespace.yaml
+kubectl -n devurllist create secret generic devurllist-db --from-env-file=/secure/devurllist-app.env
+kubectl -n devurllist create secret generic devurllist-db-migration --from-env-file=/secure/devurllist-migration.env
+kubectl -n devurllist create secret generic devurllist-db-root --from-env-file=/secure/devurllist-root.env
+kubectl -n devurllist create secret generic devurllist-harbor-pull --type=kubernetes.io/dockerconfigjson --from-file=.dockerconfigjson=/secure/harbor-pull.json
+kubectl -n jenkins create secret generic devurllist-harbor-push --type=kubernetes.io/dockerconfigjson --from-file=.dockerconfigjson=/secure/harbor-push.json
+kubectl apply -f k8s/bootstrap/storage.yaml -f k8s/bootstrap/mariadb.yaml -f k8s/bootstrap/rbac.yaml -f k8s/bootstrap/network-policy.yaml
+kubectl -n devurllist rollout status statefulset/mariadb --timeout=300s
+```
+
+DB 계정 초기화 스크립트는 빈 데이터 볼륨의 최초 시작에만 실행됩니다. 기존 PVC의 비밀번호 변경은 Secret 변경만으로 적용되지 않습니다. 앱 배포 계정에는 StatefulSet·PVC·Secret·Gateway 변경 권한을 주지 않았습니다.
+
+### Jenkins 작업 준비
+
+새 Pipeline 작업 `devurllist-pipeline`에서 Git 저장소 `https://github.com/Revlis44/devUrlList.git`, 브랜치 `*/main`, Script Path `Jenkinsfile`을 지정합니다. 기존 Git 자격증명의 해당 저장소 접근 권한은 별도 확인합니다. 자동 트리거는 이 파일에서 설정하지 않습니다.
+
+기존 `kubernetes` Cloud와 `jenkins` 네임스페이스를 사용합니다. 빌드 Pod에는 Node 24, BuildKit 0.34.2 rootless, 폐기 가능한 MariaDB 테스트 컨테이너가 있습니다. 테스트 DB의 `local-*-test-only` 값은 이 임시 DB 전용이며 실제 DB 자격증명이 아닙니다.
+
+기존 Kaniko 설정을 복사하지 않고 공식 BuildKit rootless 구성을 사용합니다. 해당 컨테이너만 seccomp/AppArmor의 Unconfined와 `--oci-worker-no-process-sandbox`가 필요하므로 실제 노드·Pod 보안 정책과 호환성을 먼저 확인합니다. 호스트 Docker 소켓이나 privileged 컨테이너는 사용하지 않으며 TLS 검증을 끄는 옵션도 없습니다. 내부 HTTPS 검증에는 기존 Jenkins 파일 자격증명 `sayinfo-local-root-ca-v2-crt`를 사용합니다.
+
+| 실행 목적 | PUSH_IMAGE | DEPLOY | VERIFY_PUBLIC |
+|---|---|---|---|
+| 테스트·이미지 빌드만 | false | false | false |
+| 최초 데이터 이전 전 이미지 준비 | true | false | false |
+| 데이터 이전 후 앱만 기동 | true | true | false |
+| 접속 전환 이후 반복 배포 | true | true | true |
+
+기본값은 모두 false입니다. 동시 빌드는 대기시키며, Git 커밋·빌드 번호 태그로 업로드한 뒤 digest를 사용해 배포합니다. 기존 앱 설정을 보관하고 단일 스키마 Job이 성공한 뒤 앱을 적용합니다. 배포·상태 검증 실패 시 이전 ConfigMap·Service·PDB·Deployment를 복원하며 DB 스키마는 되돌리지 않습니다. 최초 배포에는 이전 앱이 없어 자동 복귀 대상이 없습니다. Jenkins 실행 Pod 소실·강제 중단처럼 복귀 코드를 실행할 수 없는 경우는 운영자 복구가 필요합니다. readiness 실패·이미지 Pull 실패·DB 장애 시 실제 복귀 동작은 클러스터 배포 연습에서 확인해야 합니다.
+
+스키마 변경은 반드시 현재 앱과 이전 앱 모두에 호환되게 추가하고, 컬럼 삭제·타입 축소는 후속 릴리스에서 수행합니다. HTTP smoke 검증은 상태·정적 페이지·인증 필요 여부를 확인하며 실제 사용자 로그인 시험을 대신하지 않습니다. `PDB minAvailable=1`은 자발적인 축출에 대한 정책이며 RollingUpdate는 Deployment 설정으로 제어합니다.
+
+### SQLite 최종 이전 및 접속 전환
+
+1. SQLite 복사본으로 이전·복원 연습과 소요 시간을 측정합니다. 운영 DB를 테스트 DB로 사용하지 않습니다.
+2. 새 이미지 업로드까지만 수행합니다. 기존 SQLite 서비스에 이 버전의 읽기 전용 기능을 먼저 반영한 후 `READ_ONLY=true`로 기동하고, 모든 쓰기 요청이 차단되는지 확인합니다. 이 준비 버전 반영 자체도 별도 배포 작업입니다.
+3. 진행 중 요청을 완료한 뒤 SQLite 백업 API로 일관된 최종 스냅샷을 만듭니다. 실행 중인 DB 본체만 복사하여 WAL 내용을 누락하지 않습니다. 기존 코드·환경·DB 백업을 별도로 보존합니다.
+4. 안전한 로컬 관리 경로에서 `kubectl -n devurllist port-forward service/mariadb 13317:3306`으로 연결하고, migrator 계정 설정 파일(DB_HOST=127.0.0.1, DB_PORT=13317, DB_NAME=devurllist, DB_USER=devurllist_migrator, DB_PASSWORD)을 사용합니다.
+
+```sh
+npm ci --ignore-scripts
+node --env-file=/secure/devurllist-migrator.env scripts/migrate-mariadb.js
+node --env-file=/secure/devurllist-migrator.env scripts/import-mariadb.js --sqlite /secure/final-sites.sqlite
+```
+
+이전 도구는 대상이 비어 있는지 검사하고, 행 수와 각 컬럼 값의 해시를 비교하며, 실패한 행 삽입은 롤백합니다. 외래 키와 그룹 순환·존재 여부도 검사합니다. 자동 증가 번호의 설정은 빈 대상에서 먼저 수행되므로 실패 후 재시도할 수 있습니다. 이 도구는 가동 중인 두 DB를 동기화하는 도구가 아닙니다.
+
+5. 데이터 검증 후 앱을 배포하고 내부 Service에서 로그인·조회·변경·백업을 검증합니다. 새 DB 쓰기를 시험했다면 이전 SQLite로 단순 복귀할 수 없으므로 시험 데이터 범위와 복구 기준을 미리 정합니다.
+6. 기존 `traefik/devurl` HTTPRoute의 전체 YAML을 보관하고 변경 직전 내용을 다시 확인합니다. Gateway API의 ReferenceGrant 버전과 Traefik 지원 여부를 확인한 뒤에만 아래 파일을 적용합니다. 이 패치는 기존 rules 전체를 대체하므로 현행 규칙이 준비 당시와 다르면 조정합니다.
+
+```sh
+kubectl apply -f k8s/cutover/referencegrant.yaml
+kubectl -n traefik patch httproute devurl --type=merge --patch-file=k8s/cutover/route-patch.json
+```
+
+도메인·TLS·Gateway listener는 유지하고 backend만 `devurllist/devurllist:3000`으로 전환합니다. Accepted/ResolvedRefs와 실제 HTTPS 응답을 확인합니다. 새 MariaDB에 사용자 쓰기가 발생한 이후에는 이전 SQLite로 경로만 되돌리지 않습니다. 같은 MariaDB와 호환되는 이전 앱 이미지를 사용하거나 쓰기를 중지하고 데이터를 조정해야 합니다. 최초 이전은 쓰기 중지 구간이 있으며, 이후 앱 배포부터 순차 교체 정책을 사용합니다.
+
+### 로컬 검증
+
+```sh
+npm ci --ignore-scripts
+npm test
+docker compose -f docker/compose.test.yaml up -d --wait
+npm run test:mariadb
+docker compose -f docker/compose.test.yaml down
+docker build -t devurllist:local-test .
+```
+
+통합 테스트는 기본 `127.0.0.1:13316/devurllist_test`를 사용하고 알려진 테스트 테이블을 삭제·재생성합니다. 로컬 주소와 `devurllist_*test` 이름만 허용합니다. Jenkins에서는 같은 Pod의 임시 `devurllist_ci_test`를 사용합니다. 외부 DB 주소나 운영 DB 이름을 넣으면 실행을 거절합니다.
+
+공식 참고: [MariaDB Node.js](https://mariadb.com/docs/connectors/mariadb-connector-nodejs/connector-nodejs-promise-api), [MariaDB GET_LOCK](https://mariadb.com/docs/server/reference/sql-functions/secondary-functions/miscellaneous-functions/get_lock), [BuildKit rootless](https://github.com/moby/buildkit/blob/master/docs/rootless.md), [Kubernetes Deployment](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/), [Gateway ReferenceGrant](https://gateway-api.sigs.k8s.io/reference/api-types/referencegrant/).

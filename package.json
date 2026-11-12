@@ -8,6 +8,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test test/*.test.js"
-  }
+    "test": "node --test test/*.test.js",
+    "test:mariadb": "node --test test/mariadb.integration.js",
+    "db:migrate": "node scripts/migrate-mariadb.js"
+  },
+  "dependencies": { "mariadb": "3.5.5" }
 }

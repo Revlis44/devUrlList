@@ -1,0 +1,15 @@
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!server.js
+!seed.example.json
+!lib/
+!lib/**
+!public/
+!public/**
+!db/
+!db/**
+!scripts/
+!scripts/migrate-mariadb.js
+!scripts/import-mariadb.js

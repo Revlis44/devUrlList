@@ -18,6 +18,8 @@ services:
       LOG_DIR: /logs
       APP_ORIGIN: "${APP_ORIGIN:-}"
       COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      READ_ONLY: "${READ_ONLY:-false}"
+      TRUST_PROXY_CIDRS: "${TRUST_PROXY_CIDRS:-}"
     ports:
       - "${BIND_IP:-0.0.0.0}:${APP_PORT:-8188}:3000"
     volumes:

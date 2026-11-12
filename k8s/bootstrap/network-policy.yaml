@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devurllist-ingress
+  namespace: devurllist
+spec:
+  podSelector:
+    matchLabels:
+      app: devurllist
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: jenkins
+      ports:
+        - {protocol: TCP, port: 3000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devurllist-mariadb-ingress
+  namespace: devurllist
+spec:
+  podSelector:
+    matchLabels:
+      app: devurllist-mariadb
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: devurllist
+        - podSelector:
+            matchLabels:
+              app: devurllist-migration
+      ports:
+        - {protocol: TCP, port: 3306}

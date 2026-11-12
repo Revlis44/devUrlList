@@ -10,7 +10,7 @@ async function setup(t, options = {}) {
   const folder = await mkdtemp(join(tmpdir(), 'devsites-test-'));
   const dataDir = join(folder, 'data');
   const backupDir = join(folder, 'backups');
-  const app = createApp({ dataDir, backupDir, seed: [], ...options });
+  const app = await createApp({ dataDir, backupDir, seed: [], ...options });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await app.close(); await rm(folder, { recursive: true, force: true }); });
@@ -29,6 +29,17 @@ async function setup(t, options = {}) {
 
 const sample = { systemName: '검증 서버', url: 'https://example.internal', commonAccount: 'tester / sample-password', ip: '192.168.1.20', servicePort: '8080, 443', sshPort: '22', serverAccount: 'dev', externalAccess: 'no', notes: '최초 값' };
 const credentials = { username: 'test-user', name: '검증 사용자', jobTitle: '대리', password: 'OnlyTestPassword123!' };
+
+test('이전 중 읽기 전용 모드는 상태 조회를 허용하고 로그인·가입·변경을 차단', async t => {
+  const { client, store } = await setup(t, { readOnly: true });
+  const request = client();
+  assert.equal((await request('/readyz')).status, 200);
+  assert.equal((await request('/api/me')).status, 200);
+  for (const path of ['/api/register', '/api/login', '/api/logout', '/api/sites', '/api/groups']) {
+    assert.equal((await request(path, 'POST', credentials)).status, 503);
+  }
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0);
+});
 
 test('HTTPS 프록시: 허용 주소 설정 전 차단, 설정 후 로그인·보안 쿠키·로그아웃', async t => {
   const appOrigin = 'https://servers.example.com';
@@ -170,7 +181,7 @@ test('가입 시 아이디·직급의 누락, 잘못된 형식과 길이를 거�
 test('계정이 없는 기존 DB에 아이디·직급 항목 추가, 서버 목록과 이력 보존', async t => {
   const folder = await mkdtemp(join(tmpdir(), 'devsites-schema-'));
   const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [sample] };
-  const previous = createApp(config);
+  const previous = await createApp(config);
   const beforeSites = previous.store.list();
   const beforeHistory = previous.store.history(beforeSites[0].id);
   await previous.store.close();
@@ -255,12 +266,12 @@ test('재시작 후 사용자·목록·이력 유지, 초기 데이터는 한 �
   const folder = await mkdtemp(join(tmpdir(), 'devsites-restart-'));
   const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [sample] };
   await mkdir(config.dataDir);
-  let app = createApp(config);
+  let app = await createApp(config);
   assert.equal(app.store.list().length, 1);
   const user = await app.store.createUser({ username: 'restart-user', name: '지속성 확인', jobTitle: '과장' }, 'not-used-for-login');
   await app.store.mutate('delete', 1, { version: 1 }, user);
   await app.store.close();
-  app = createApp(config);
+  app = await createApp(config);
   t.after(async () => { await app.store.close(); await rm(folder, { recursive: true, force: true }); });
   assert.equal(app.store.list().length, 1);
   assert.ok(app.store.list()[0].deletedAt);
@@ -456,18 +467,18 @@ test('그룹 변경은 백업 실패 시 저장하지 않고 DB 오류 시 롤�
 test('기존 DB의 미분류 서버·이력 보존 및 그룹과 소속 관계의 재시작 후 유지', async t => {
   const folder = await mkdtemp(join(tmpdir(), 'devsites-groups-restart-'));
   const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [sample] };
-  let app = createApp(config);
+  let app = await createApp(config);
   app.store.db.exec("DROP TABLE groups; UPDATE sites SET data = json_remove(data, '$.groupId'); UPDATE history SET after_data = json_remove(after_data, '$.groupId', '$.groupName')");
   const beforeHistory = app.store.history(1);
   await app.store.close();
-  app = createApp(config);
+  app = await createApp(config);
   assert.equal(app.store.find(1).groupId, null); assert.equal(app.store.find(1).systemName, sample.systemName);
   assert.deepEqual(app.store.history(1), beforeHistory);
   const { group: parent } = await app.store.mutateGroup('create', null, { name: '상위' });
   const { group: child } = await app.store.mutateGroup('create', null, { name: '하위', parentId: parent.id });
   await app.store.mutate('update', 1, { ...sample, groupId: child.id, version: 1 }, { id: null, name: '검증' });
   await app.store.close();
-  app = createApp(config);
+  app = await createApp(config);
   t.after(async () => { await app.store.close(); await rm(folder, { recursive: true, force: true }); });
   assert.equal(app.store.listGroups().length, 2); assert.equal(app.store.find(1).groupId, child.id);
   assert.equal(app.store.history(1)[0].after.groupName, '상위 / 하위');
@@ -531,14 +542,14 @@ test('이전 sortOrder 입력을 무시하고 DB와 새 이력에 저장하지 �
 test('이전 sortOrder가 있는 DB는 최초 등록 순서로 조회하고 원본·과거 이력을 보존', async t => {
   const folder = await mkdtemp(join(tmpdir(), 'devsites-numbering-restart-'));
   const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [{ ...sample, sortOrder: 99 }, { ...sample, sortOrder: 1, systemName: '두 번째 서버' }] };
-  let app = createApp(config);
+  let app = await createApp(config);
   t.after(async () => { await app.store.close(); await rm(folder, { recursive: true, force: true }); });
   for (const { data } of app.store.db.prepare('SELECT data FROM sites').all()) assert.equal(Object.hasOwn(JSON.parse(data), 'sortOrder'), false);
   app.store.db.exec("UPDATE sites SET data = json_set(data, '$.sortOrder', CASE id WHEN 1 THEN 99 ELSE 1 END); UPDATE history SET after_data = json_set(after_data, '$.sortOrder', CASE site_id WHEN 1 THEN 99 ELSE 1 END)");
   const originalSites = app.store.db.prepare('SELECT * FROM sites ORDER BY id').all();
   const originalHistory = app.store.history(1);
   await app.store.close();
-  app = createApp(config);
+  app = await createApp(config);
   assert.deepEqual(app.store.list().map(site => site.id), [1, 2]);
   assert.equal(Object.hasOwn(app.store.find(1), 'sortOrder'), false);
   assert.deepEqual(app.store.db.prepare('SELECT * FROM sites ORDER BY id').all(), originalSites);
@@ -633,19 +644,19 @@ test('하위 정보: 추가·수정·제거·시스템 삭제의 기록과 백�
 test('하위 정보: 기존 DB·과거 기록 무변경, 재시작 유지, 백업 실패 시 하위 수정 취소', async t => {
   const folder = await mkdtemp(join(tmpdir(), 'devsites-components-'));
   const config = { dataDir: join(folder, 'data'), backupDir: join(folder, 'backups'), seed: [sample] };
-  let app = createApp(config);
+  let app = await createApp(config);
   t.after(async () => { await app.store.close(); await rm(folder, { recursive: true, force: true }); });
   app.store.db.exec("UPDATE sites SET data = json_remove(data, '$.components'); UPDATE history SET after_data = json_remove(after_data, '$.components')");
   const original = app.store.db.prepare('SELECT * FROM sites').all();
   const history = app.store.history(1);
-  await app.store.close(); app = createApp(config);
+  await app.store.close(); app = await createApp(config);
   assert.deepEqual(app.store.find(1).components, []);
   assert.deepEqual(app.store.db.prepare('SELECT * FROM sites').all(), original);
   assert.deepEqual(app.store.history(1), history);
   const actor = { id: null, name: '검증' };
   assert.equal((await app.store.mutate('update', 1, { ...sample, version: 1 }, actor)).changed, false);
   const saved = await app.store.mutate('update', 1, { ...sample, version: 1, components: [{ type: 'OTHER', name: '기타 서비스', useSystemIp: true, useSystemSshPort: true }] }, actor);
-  await app.store.close(); app = createApp(config);
+  await app.store.close(); app = await createApp(config);
   assert.deepEqual(app.store.find(1), saved.site);
   assert.deepEqual(app.store.history(1).at(-1), history[0]);
   const beforeHistory = app.store.history(1);

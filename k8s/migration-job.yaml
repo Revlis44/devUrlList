@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __MIGRATION_JOB__
+  namespace: devurllist
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: devurllist-migration
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: devurllist-harbor-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: migrate
+          image: __APP_IMAGE__
+          command: ["node", "scripts/migrate-mariadb.js"]
+          env:
+            - {name: DB_HOST, value: mariadb.devurllist.svc.cluster.local}
+            - {name: DB_PORT, value: "3306"}
+            - {name: DB_NAME, value: devurllist}
+            - {name: DB_USER, value: devurllist_migrator}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: devurllist-db-migration, key: DB_PASSWORD}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

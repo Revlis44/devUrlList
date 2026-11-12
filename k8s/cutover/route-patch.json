@@ -1,0 +1,1 @@
+{"spec":{"rules":[{"matches":[{"path":{"type":"PathPrefix","value":"/"}}],"backendRefs":[{"group":"","kind":"Service","name":"devurllist","namespace":"devurllist","port":3000,"weight":1}]}]}}

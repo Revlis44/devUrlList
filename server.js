@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { createStore, HttpError, validateProfile } from './lib/store.js';
+import { createClientAddress } from './lib/client-address.js';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const scrypt = promisify(scryptCallback);
@@ -39,13 +40,21 @@ async function readJson(req) {
   } catch { throw new HttpError(400, '입력 내용을 확인해 주세요.'); }
 }
 
-export function createApp(options = {}) {
+export async function createApp(options = {}) {
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? join(root, 'data'));
   const backupDir = resolve(options.backupDir ?? process.env.BACKUP_DIR ?? join(root, 'backups'));
   const secureCookie = options.secureCookie ?? process.env.COOKIE_SECURE === 'true';
+  const readOnly = options.readOnly ?? process.env.READ_ONLY === 'true';
+  const clientAddress = createClientAddress(options.trustProxyCidrs ?? process.env.TRUST_PROXY_CIDRS ?? '');
   const appOrigin = (options.appOrigin ?? process.env.APP_ORIGIN) || undefined;
   if (appOrigin && new URL(appOrigin).origin !== appOrigin) throw new Error('APP_ORIGIN은 경로 없이 입력하세요. 예: https://servers.example.com');
-  const store = createStore({ dataDir, backupDir, seed: options.seed ?? JSON.parse(readFileSync(join(root, 'seed.example.json'), 'utf8')) });
+  const backend = options.dbClient ?? process.env.DB_CLIENT ?? 'sqlite';
+  if (!['sqlite', 'mariadb'].includes(backend)) throw new Error('DB_CLIENT는 sqlite 또는 mariadb여야 합니다.');
+  const store = backend === 'mariadb'
+    ? await (await import('./lib/mariadb-store.js')).createMariaStore({ backupDir, database: options.database })
+    : createStore({ dataDir, backupDir, seed: options.seed ?? JSON.parse(readFileSync(join(root, 'seed.example.json'), 'utf8')) });
+  let draining = false;
+  let closing;
   const assets = new Map([
     ['/', ['index.html', 'text/html; charset=utf-8']],
     ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
@@ -55,10 +64,11 @@ export function createApp(options = {}) {
     ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],
   ]);
   const attempts = new Map();
-  function rateLimit(req) {
+  async function rateLimit(req) {
     const now = Date.now();
+    if (store.consumeLoginAttempt) return store.consumeLoginAttempt(clientAddress(req), now);
     for (const [key, value] of attempts) if (value.until < now) attempts.delete(key);
-    const key = req.socket.remoteAddress;
+    const key = clientAddress(req);
     const item = attempts.get(key) ?? { count: 0, until: now + 15 * 60 * 1000 };
     item.count++;
     attempts.set(key, item);
@@ -67,15 +77,14 @@ export function createApp(options = {}) {
   function tokenFrom(req) {
     return (req.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('devsites_session='))?.slice(17) ?? '';
   }
-  function userFrom(req) {
+  async function userFrom(req) {
     const token = tokenFrom(req);
     if (!/^[a-f0-9]{64}$/.test(token)) return null;
-    return store.db.prepare('SELECT users.id, users.username, users.name, users.job_title AS jobTitle FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ?').get(digest(token), Date.now()) ?? null;
+    return store.userForSession(digest(token), Date.now());
   }
-  function setSession(req, res, user) {
+  async function setSession(req, res, user) {
     const token = randomBytes(32).toString('hex');
-    store.db.prepare('DELETE FROM sessions WHERE expires_at <= ? OR token_hash = ?').run(Date.now(), digest(tokenFrom(req)));
-    store.db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(digest(token), user.id, Date.now() + sessionAge * 1000);
+    await store.createSession(digest(token), user.id, Date.now() + sessionAge * 1000, digest(tokenFrom(req)), Date.now());
     res.setHeader('Set-Cookie', `devsites_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionAge}${secureCookie ? '; Secure' : ''}`);
   }
   function json(res, status, body) {
@@ -90,6 +99,13 @@ export function createApp(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (['/livez', '/readyz'].includes(pathname) && ['GET', 'HEAD'].includes(req.method)) {
+        if (pathname === '/readyz') {
+          if (draining) return json(res, 503, { ok: false });
+          try { await store.checkReady(); } catch { return json(res, 503, { ok: false }); }
+        }
+        return json(res, 200, { ok: true });
+      }
       if (!pathname.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, '지원하지 않는 요청입니다.');
         const asset = assets.get(pathname);
@@ -100,15 +116,16 @@ export function createApp(options = {}) {
         return;
       }
       if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) throw new HttpError(405, '지원하지 않는 요청입니다.');
+      if (readOnly && req.method !== 'GET') throw new HttpError(503, '데이터 이전 중입니다. 조회는 가능하며 변경은 잠시 후 다시 시도해 주세요.');
       if (req.method !== 'GET') {
         const expectedOrigin = appOrigin ?? `http${secureCookie ? 's' : ''}://${req.headers.host}`;
         if (req.headers['x-requested-with'] !== 'dev-site-list' || req.headers['sec-fetch-site'] === 'cross-site' || (req.headers.origin && req.headers.origin !== expectedOrigin)) {
           throw new HttpError(403, '요청 출처를 확인할 수 없습니다. 페이지를 새로고침해 주세요.');
         }
       }
-      if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { user: userFrom(req) });
+      if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { user: await userFrom(req) });
       if (['/api/register', '/api/login'].includes(pathname) && req.method === 'POST') {
-        rateLimit(req);
+        await rateLimit(req);
         const body = await readJson(req);
         const username = typeof body.username === 'string' ? body.username.normalize('NFKC').trim() : '';
         const password = body.password;
@@ -119,25 +136,25 @@ export function createApp(options = {}) {
           const { name, jobTitle } = validateProfile(body);
           user = await store.createUser({ username, name, jobTitle }, await hashPassword(password));
         } else {
-          const found = store.db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+          const found = await store.userByUsername(username);
           const valid = await verifyPassword(password, found?.password_hash);
           if (!found || !valid) throw new HttpError(401, '아이디 또는 비밀번호가 올바르지 않습니다.');
           user = { id: found.id, username: found.username, name: found.name, jobTitle: found.job_title };
         }
-        setSession(req, res, user);
+        await setSession(req, res, user);
         return json(res, pathname === '/api/register' ? 201 : 200, { user });
       }
-      const user = userFrom(req);
+      const user = await userFrom(req);
       if (!user) throw new HttpError(401, '로그인이 필요합니다. 다시 로그인해 주세요.');
       if (pathname === '/api/me' && req.method === 'PUT') return json(res, 200, await store.updateProfile(user.id, await readJson(req)));
       if (pathname === '/api/logout' && req.method === 'POST') {
-        store.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(digest(tokenFrom(req)));
+        await store.deleteSession(digest(tokenFrom(req)));
         res.setHeader('Set-Cookie', `devsites_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookie ? '; Secure' : ''}`);
         return json(res, 200, { ok: true });
       }
-      if (pathname === '/api/sites' && req.method === 'GET') return json(res, 200, { sites: store.list(), groups: store.listGroups() });
+      if (pathname === '/api/sites' && req.method === 'GET') return json(res, 200, { sites: await store.list(), groups: await store.listGroups() });
       if (pathname === '/api/sites' && req.method === 'POST') return json(res, 201, await store.mutate('create', null, await readJson(req), user));
-      if (pathname === '/api/groups' && req.method === 'GET') return json(res, 200, { groups: store.listGroups() });
+      if (pathname === '/api/groups' && req.method === 'GET') return json(res, 200, { groups: await store.listGroups() });
       if (pathname === '/api/groups' && req.method === 'POST') return json(res, 201, await store.mutateGroup('create', null, await readJson(req)));
       const groupMatch = pathname.match(/^\/api\/groups\/(\d+)(\/move)?$/);
       if (groupMatch && ['PUT', 'DELETE'].includes(req.method)) {
@@ -153,7 +170,7 @@ export function createApp(options = {}) {
       if (match) {
         const id = Number(match[1]);
         if (!Number.isSafeInteger(id)) throw new HttpError(404, '항목을 찾을 수 없습니다.');
-        if (match[2] === '/history' && req.method === 'GET') return json(res, 200, { history: store.history(id) });
+        if (match[2] === '/history' && req.method === 'GET') return json(res, 200, { history: await store.history(id) });
         if (match[2] === '/move' && req.method === 'PUT') return json(res, 200, await store.moveSite(id, await readJson(req), user));
         if (match[2] === '/permanent' && req.method === 'DELETE') return json(res, 200, await store.permanentlyDelete(id, await readJson(req)));
         if (!match[2] && ['PUT', 'DELETE'].includes(req.method)) {
@@ -169,15 +186,26 @@ export function createApp(options = {}) {
   });
   server.requestTimeout = 30000;
   server.headersTimeout = 15000;
-  return { server, store, async close() { await new Promise((done, reject) => server.close(error => error ? reject(error) : done())); await store.close(); } };
+  return { server, store, drain() { draining = true; }, close() {
+    draining = true;
+    closing ??= (async () => {
+      if (server.listening) await new Promise((done, reject) => server.close(error => error ? reject(error) : done()));
+      await store.close();
+    })();
+    return closing;
+  } };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.umask(0o077);
-  const app = createApp();
+  const app = await createApp();
   const host = process.env.HOST ?? '127.0.0.1';
   const port = Number(process.env.PORT ?? 3000);
   app.server.listen(port, host, () => console.log(`개발서버 목록: http://${host}:${app.server.address().port}`));
   app.server.on('error', error => { console.error('서버 시작 실패:', error.code); process.exitCode = 1; app.store.close(); });
-  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { app.close().then(() => process.exit(0)); });
+  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
+    app.drain();
+    const deadline = setTimeout(() => process.exit(1), 35000).unref();
+    app.close().then(() => { clearTimeout(deadline); process.exit(0); }).catch(() => process.exit(1));
+  });
 }

@@ -1,0 +1,47 @@
+CREATE TABLE IF NOT EXISTS metadata (
+  `key` VARCHAR(100) PRIMARY KEY, value LONGTEXT NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS users (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(40) NOT NULL, name_key VARBINARY(160) NOT NULL UNIQUE,
+  username VARCHAR(40), username_key VARBINARY(160) UNIQUE,
+  job_title VARCHAR(40) NOT NULL DEFAULT '',
+  password_hash VARCHAR(200) NOT NULL, created_at VARCHAR(40) NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS `groups` (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL, name_key VARBINARY(400) NOT NULL,
+  parent_id BIGINT UNSIGNED, parent_key BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  version INT UNSIGNED NOT NULL DEFAULT 1,
+  FOREIGN KEY (parent_id) REFERENCES `groups`(id),
+  UNIQUE KEY groups_sibling_name (parent_key, name_key)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS sites (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  data LONGTEXT NOT NULL CHECK (JSON_VALID(data)),
+  version INT UNSIGNED NOT NULL DEFAULT 1,
+  created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL,
+  updated_by VARCHAR(40) NOT NULL, deleted_at VARCHAR(40)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS history (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  site_id BIGINT UNSIGNED NOT NULL, action VARCHAR(30) NOT NULL,
+  actor_id BIGINT UNSIGNED, actor_name VARCHAR(40) NOT NULL,
+  changed_at VARCHAR(40) NOT NULL,
+  before_data LONGTEXT CHECK (before_data IS NULL OR JSON_VALID(before_data)),
+  after_data LONGTEXT NOT NULL CHECK (JSON_VALID(after_data)),
+  backup_file VARCHAR(255),
+  FOREIGN KEY (site_id) REFERENCES sites(id),
+  FOREIGN KEY (actor_id) REFERENCES users(id),
+  INDEX history_site (site_id, id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash CHAR(64) PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL, expires_at BIGINT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  INDEX sessions_expiry (expires_at)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS login_attempts (
+  address VARCHAR(64) PRIMARY KEY, attempts INT UNSIGNED NOT NULL,
+  expires_at BIGINT NOT NULL, INDEX login_attempts_expiry (expires_at)
+) ENGINE=InnoDB;

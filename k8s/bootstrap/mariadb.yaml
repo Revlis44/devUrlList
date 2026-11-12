@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devurllist-mariadb-init
+  namespace: devurllist
+data:
+  01-app-user.sh: |
+    app_password_hex="$(printf '%s' "$APP_DB_PASSWORD" | od -An -v -tx1 | tr -d ' \n')"
+    MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb --protocol=socket -uroot <<SQL
+    SET @password = CONVERT(0x$app_password_hex USING utf8mb4);
+    SET @statement = CONCAT('CREATE USER IF NOT EXISTS devurllist_app@\'%\' IDENTIFIED BY ', QUOTE(@password));
+    PREPARE create_app FROM @statement;
+    EXECUTE create_app;
+    DEALLOCATE PREPARE create_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON devurllist.* TO devurllist_app@'%';
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: devurllist
+spec:
+  clusterIP: None
+  selector:
+    app: devurllist-mariadb
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mariadb
+  namespace: devurllist
+spec:
+  serviceName: mariadb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: devurllist-mariadb
+  template:
+    metadata:
+      labels:
+        app: devurllist-mariadb
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mariadb
+          image: mariadb:11.4.8@sha256:bc474f00629f0123c10f9e1bca193a45d18af15a274cf0656acda64f1086c3b6
+          args: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_bin"]
+          ports:
+            - containerPort: 3306
+              name: mysql
+          env:
+            - name: MARIADB_DATABASE
+              value: devurllist
+            - name: MARIADB_USER
+              value: devurllist_migrator
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: devurllist-db-migration, key: DB_PASSWORD}
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: devurllist-db-root, key: password}
+            - name: APP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: devurllist-db, key: DB_PASSWORD}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 1Gi}
+          startupProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/mysql}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+      volumes:
+        - name: init
+          configMap:
+            name: devurllist-mariadb-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: rook-ceph-block
+        resources:
+          requests:
+            storage: 10Gi

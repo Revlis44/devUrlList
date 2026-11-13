@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const exec = promisify(execFile);
-for (const scenario of ['schema-failure', 'rollout-failure', 'smoke-failure']) {
-  test('배포 실패 처리: ' + scenario, async t => {
+for (const scenario of ['first-deploy', 'schema-failure', 'rollout-failure', 'smoke-failure']) {
+  test('배포 처리: ' + scenario, async t => {
     const folder = await mkdtemp(join(tmpdir(), 'devurllist-deploy-'));
     t.after(() => rm(folder, { recursive: true, force: true }));
     await mkdir(join(folder, 'scripts'));
@@ -22,6 +22,7 @@ for (const scenario of ['schema-failure', 'rollout-failure', 'smoke-failure']) {
 echo "$*" >> "$CALLS"
 case "$*" in
   *"get deployment/devurllist"*)
+    if [ "$SCENARIO" = first-deploy ]; then exit 0; fi
     echo '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"devurllist","namespace":"devurllist","resourceVersion":"1"},"spec":{"replicas":2}}]}'
     ;;
   *"wait --for=condition=complete"*) [ "$SCENARIO" != schema-failure ];;
@@ -31,12 +32,19 @@ case "$*" in
   *"apply -f .release/rollback.json"*) touch "$ROLLBACK";;
 esac
 `, { mode: 0o755 });
-    await assert.rejects(exec('sh', [new URL('../scripts/deploy-k8s.sh', import.meta.url).pathname], {
+    const result = exec('sh', [new URL('../scripts/deploy-k8s.sh', import.meta.url).pathname], {
       cwd: folder, env: { ...process.env, PATH: folder + ':' + dirname(process.execPath) + ':' + process.env.PATH,
         SCENARIO: scenario, CALLS: join(folder, 'calls'), ROLLBACK: join(folder, 'rolled-back'), MIGRATION_JOB: 'devurllist-migrate-test' },
-    }));
+    });
+    if (scenario === 'first-deploy') await result;
+    else await assert.rejects(result);
     const calls = await readFile(join(folder, 'calls'), 'utf8');
-    if (scenario === 'schema-failure') {
+    if (scenario === 'first-deploy') {
+      assert.match(calls, /create -f .release\/migration-job.yaml/);
+      assert.match(calls, /apply -f .release\/app.yaml/);
+      assert.doesNotMatch(calls, /apply -f .release\/rollback.json/);
+      await assert.rejects(readFile(join(folder, '.release/rollback.json')), { code: 'ENOENT' });
+    } else if (scenario === 'schema-failure') {
       assert.doesNotMatch(calls, /apply -f/);
     } else {
       assert.match(calls, /apply -f .release\/app.yaml/);

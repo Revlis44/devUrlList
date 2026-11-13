@@ -1,5 +1,6 @@
 import { readFile, writeFile, rm } from 'node:fs/promises';
-const data = JSON.parse(await readFile('.release/previous.json', 'utf8'));
+const previous = (await readFile('.release/previous.json', 'utf8')).trim();
+const data = previous ? JSON.parse(previous) : { items: [] };
 const items = data.items ?? (data.kind ? [data] : []);
 if (items.some(item => item.kind === 'Deployment')) {
   const order = ['ConfigMap', 'Service', 'PodDisruptionBudget', 'Deployment'];

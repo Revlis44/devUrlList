@@ -222,7 +222,7 @@ SQLite 백업 구현은 [Node.js 24 SQLite 문서](https://nodejs.org/download/r
 
 ## Rancher MariaDB 배포 준비
 
-2026-11-12 기준 소스와 설정 파일입니다. 아래 명령은 운영자가 환경과 이전 결과를 확인한 뒤 실행하는 절차이며, 파일 작성·커밋·푸시만으로 운영 환경에 적용되었음을 의미하지 않습니다.
+2026-11-13 기준 소스와 설정 파일입니다. 아래 명령은 운영자가 환경과 이전 결과를 확인한 뒤 실행하는 절차이며, 파일 작성·커밋·푸시만으로 운영 환경에 적용되었음을 의미하지 않습니다.
 
 접속 주소와 배포 후 검증 대상은 모두 `https://devurl.intra.sayinfo.co.kr`로 통일합니다.
 
@@ -230,7 +230,7 @@ SQLite 백업 구현은 [Node.js 24 SQLite 문서](https://nodejs.org/download/r
 |---|---|---|
 | 로그인·변경 요청의 허용 주소 | `k8s/app.yaml`의 `APP_ORIGIN` | `https://devurl.intra.sayinfo.co.kr` |
 | HTTPS 전용 세션 쿠키 | `k8s/app.yaml`의 `COOKIE_SECURE` | `"true"` |
-| 접속 전환 후 외부 검증 주소 | `scripts/deploy-k8s.sh`의 `VERIFY_PUBLIC=true` 분기 | `https://devurl.intra.sayinfo.co.kr` |
+| 배포 후 외부 검증 주소 | `scripts/deploy-k8s.sh`의 HTTPS 검증 | `https://devurl.intra.sayinfo.co.kr` |
 
 기존 Traefik의 도메인·TLS 설정을 사용하며, `k8s/cutover/`는 데이터 이전과 앱 검증 후 기존 라우팅의 연결 대상을 새 서비스로 전환할 때만 적용합니다. `k8s/bootstrap/network-policy.yaml`의 `Ingress`는 앱·DB로 들어오는 통신 허용 규칙으로, 도메인 라우팅을 생성하거나 변경하지 않습니다.
 
@@ -302,22 +302,25 @@ DB 계정 초기화 스크립트는 빈 데이터 볼륨의 최초 시작에만 
 
 기존 Kaniko 설정을 복사하지 않고 공식 BuildKit rootless 구성을 사용합니다. 해당 컨테이너만 seccomp/AppArmor의 Unconfined와 `--oci-worker-no-process-sandbox`가 필요하므로 실제 노드·Pod 보안 정책과 호환성을 먼저 확인합니다. 호스트 Docker 소켓이나 privileged 컨테이너는 사용하지 않으며 TLS 검증을 끄는 옵션도 없습니다. 내부 HTTPS 검증에는 기존 Jenkins 파일 자격증명 `sayinfo-local-root-ca-v2-crt`를 사용합니다.
 
-| 실행 목적 | PUSH_IMAGE | DEPLOY | VERIFY_PUBLIC |
-|---|---|---|---|
-| 테스트·이미지 빌드만 | false | false | false |
-| 최초 데이터 이전 전 이미지 준비 | true | false | false |
-| 데이터 이전 후 앱만 기동 | true | true | false |
-| 접속 전환 이후 반복 배포 | true | true | true |
+빌드 파라미터 없이 매 실행마다 테스트 → 이미지 빌드·Harbor 업로드 → DB 스키마 작업 → Rancher 앱 순차 교체 → 내부 Service·실제 HTTPS 도메인 검증을 진행합니다. 앞 단계가 실패하면 다음 단계로 진행하지 않습니다. 이 작업은 데이터 이전과 도메인 전환이 완료된 환경의 반복 배포용입니다.
 
-이미지 빌드 단계에서 `PUSH_IMAGE` 환경변수가 없거나 비어 있으면 `false`로 처리하여 Harbor 업로드 없이 로컬 OCI 이미지 파일을 생성합니다.
+일반 배포 순서는 다음과 같습니다.
+
+1. 소스 수정과 로컬 테스트를 완료하고 `main`에 커밋·푸시합니다.
+2. Jenkins의 `devurllist-pipeline`에서 빌드를 실행합니다. 기존 작업 화면에 이전 선택 항목이 남아 있어도 해당 값은 사용하지 않으며, 변경된 Jenkinsfile로 실행하면 전체 배포를 진행합니다.
+3. Jenkins `Finished: SUCCESS`, Rancher 앱 Ready 2/2, 실제 도메인의 로그인과 변경한 기능을 확인합니다.
+
+테스트·이미지 빌드만 필요한 경우 아래 로컬 검증 절차를 사용합니다. Jenkins에서는 Harbor 인증 정보가 없으면 실패하며, 업로드나 배포를 건너뛰는 옵션은 제공하지 않습니다.
 
 최초 배포에서 기존 앱 리소스 조회 결과가 비어 있으면 복원 대상이 없는 것으로 처리하고 스키마 작업과 앱 배포를 진행합니다. 비어 있지 않은 조회 결과가 올바른 JSON이 아니면 배포를 중단합니다.
 
-기본값은 모두 false입니다. 동시 빌드는 대기시키며, Git 커밋·빌드 번호 태그로 업로드한 뒤 digest를 사용해 배포합니다. 기존 앱 설정을 보관하고 단일 스키마 Job이 성공한 뒤 앱을 적용합니다. 배포·상태 검증 실패 시 이전 ConfigMap·Service·PDB·Deployment를 복원하며 DB 스키마는 되돌리지 않습니다. 최초 배포에는 이전 앱이 없어 자동 복귀 대상이 없습니다. Jenkins 실행 Pod 소실·강제 중단처럼 복귀 코드를 실행할 수 없는 경우는 운영자 복구가 필요합니다. readiness 실패·이미지 Pull 실패·DB 장애 시 실제 복귀 동작은 클러스터 배포 연습에서 확인해야 합니다.
+동시 빌드는 대기시키며, Git 커밋·빌드 번호 태그로 업로드한 뒤 digest를 사용해 배포합니다. 기존 앱 설정을 보관하고 단일 스키마 Job이 성공한 뒤 앱을 적용합니다. 배포·상태 검증 실패 시 이전 ConfigMap·Service·PDB·Deployment를 복원하며 DB 스키마는 되돌리지 않습니다. 최초 배포에는 이전 앱이 없어 자동 복귀 대상이 없습니다. Jenkins 실행 Pod 소실·강제 중단처럼 복귀 코드를 실행할 수 없는 경우는 운영자 복구가 필요합니다. readiness 실패·이미지 Pull 실패·DB 장애 시 실제 복귀 동작은 클러스터 배포 연습에서 확인해야 합니다.
 
 스키마 변경은 반드시 현재 앱과 이전 앱 모두에 호환되게 추가하고, 컬럼 삭제·타입 축소는 후속 릴리스에서 수행합니다. HTTP smoke 검증은 상태·정적 페이지·인증 필요 여부를 확인하며 실제 사용자 로그인 시험을 대신하지 않습니다. `PDB minAvailable=1`은 자발적인 축출에 대한 정책이며 RollingUpdate는 Deployment 설정으로 제어합니다.
 
 ### SQLite 최종 이전 및 접속 전환
+
+아래는 새 환경의 최초 이전을 위한 별도 운영 절차입니다. 현재 Jenkins 작업은 업로드·배포·도메인 검증을 분리하지 않으므로, 최초 이전의 이미지 준비와 전환 전 앱 검증에는 사용하지 않습니다. 반복 배포에서는 이 절차를 다시 실행하지 않습니다.
 
 1. SQLite 복사본으로 이전·복원 연습과 소요 시간을 측정합니다. 운영 DB를 테스트 DB로 사용하지 않습니다.
 2. 새 이미지 업로드까지만 수행합니다. 기존 SQLite 서비스에 이 버전의 읽기 전용 기능을 먼저 반영한 후 `READ_ONLY=true`로 기동하고, 모든 쓰기 요청이 차단되는지 확인합니다. 이 준비 버전 반영 자체도 별도 배포 작업입니다.

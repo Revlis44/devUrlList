@@ -29,8 +29,7 @@ if ! kubectl apply -f .release/app.yaml ||
   rollback
   exit 1
 fi
-if [ "${VERIFY_PUBLIC:-false}" = true ] &&
-   ! node scripts/smoke.js https://devurl.intra.sayinfo.co.kr; then
+if ! node scripts/smoke.js https://devurl.intra.sayinfo.co.kr; then
   rollback
   exit 1
 fi

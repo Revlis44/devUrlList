@@ -13,11 +13,6 @@ pipeline {
     timeout(time: 30, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '30'))
   }
-  parameters {
-    booleanParam(name: 'PUSH_IMAGE', defaultValue: false, description: 'Harbor에 검증한 이미지를 업로드')
-    booleanParam(name: 'DEPLOY', defaultValue: false, description: '데이터 이전 완료 후 앱을 배포')
-    booleanParam(name: 'VERIFY_PUBLIC', defaultValue: false, description: '접속 전환 완료 후 HTTPS 주소도 검증')
-  }
   environment {
     IMAGE_REPOSITORY = 'harbor.sayinfo.co.kr/devurllist/devurllist'
     DB_HOST = '127.0.0.1'
@@ -30,7 +25,6 @@ pipeline {
     stage('Validate') {
       steps {
         script {
-          if (params.DEPLOY && !params.PUSH_IMAGE) error('DEPLOY는 PUSH_IMAGE와 함께 사용합니다.')
           env.IMAGE_TAG = "build-${env.BUILD_NUMBER}-sha-${env.GIT_COMMIT.take(12)}"
           env.MIGRATION_JOB = "devurllist-migrate-${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(12)}"
         }
@@ -46,15 +40,10 @@ pipeline {
         container('buildkit') {
           sh '''
             set -eu
-            if [ "${PUSH_IMAGE:-false}" = "true" ]; then
-              test -s /home/user/.docker/config.json
-              output="type=image,name=$IMAGE_REPOSITORY:$IMAGE_TAG,push=true"
-            else
-              output="type=oci,dest=$WORKSPACE/.release/image.tar"
-            fi
+            test -s /home/user/.docker/config.json
             buildctl-daemonless.sh build --frontend dockerfile.v0 \
               --local context="$WORKSPACE" --local dockerfile="$WORKSPACE" \
-              --opt platform=linux/amd64 --output "$output" \
+              --opt platform=linux/amd64 --output "type=image,name=$IMAGE_REPOSITORY:$IMAGE_TAG,push=true" \
               --metadata-file "$WORKSPACE/.release/image-metadata.json"
           '''
         }
@@ -63,7 +52,6 @@ pipeline {
       }
     }
     stage('Deploy') {
-      when { expression { params.DEPLOY } }
       steps {
         withCredentials([file(credentialsId: 'sayinfo-local-root-ca-v2-crt', variable: 'NODE_EXTRA_CA_CERTS')]) {
         sh '''

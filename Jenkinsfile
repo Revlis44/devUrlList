@@ -25,7 +25,7 @@ pipeline {
     stage('Validate') {
       steps {
         script {
-          env.IMAGE_TAG = "build-${env.BUILD_NUMBER}-sha-${env.GIT_COMMIT.take(12)}"
+          env.IMAGE_TAG = "sha-${env.GIT_COMMIT.take(12)}"
           env.MIGRATION_JOB = "devurllist-migrate-${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(12)}"
         }
         sh 'npm ci --ignore-scripts --no-audit --no-fund'
@@ -41,9 +41,10 @@ pipeline {
           sh '''
             set -eu
             test -s /home/user/.docker/config.json
+            output=$(printf 'type=image,"name=%s:%s,%s:%s",push=true' "$IMAGE_REPOSITORY" "$IMAGE_TAG" "$IMAGE_REPOSITORY" "$BUILD_NUMBER")
             buildctl-daemonless.sh build --frontend dockerfile.v0 \
               --local context="$WORKSPACE" --local dockerfile="$WORKSPACE" \
-              --opt platform=linux/amd64 --output "type=image,name=$IMAGE_REPOSITORY:$IMAGE_TAG,push=true" \
+              --opt platform=linux/amd64 --output "$output" \
               --metadata-file "$WORKSPACE/.release/image-metadata.json"
           '''
         }

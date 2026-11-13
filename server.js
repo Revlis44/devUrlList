@@ -166,12 +166,13 @@ export async function createApp(options = {}) {
         }
         return json(res, 200, await store.mutateGroup(req.method === 'PUT' ? 'update' : 'delete', id, await readJson(req)));
       }
-      const match = pathname.match(/^\/api\/sites\/(\d+)(\/history|\/permanent|\/move)?$/);
+      const match = pathname.match(/^\/api\/sites\/(\d+)(\/history|\/permanent|\/move|\/restore)?$/);
       if (match) {
         const id = Number(match[1]);
         if (!Number.isSafeInteger(id)) throw new HttpError(404, '항목을 찾을 수 없습니다.');
         if (match[2] === '/history' && req.method === 'GET') return json(res, 200, { history: await store.history(id) });
         if (match[2] === '/move' && req.method === 'PUT') return json(res, 200, await store.moveSite(id, await readJson(req), user));
+        if (match[2] === '/restore' && req.method === 'POST') return json(res, 200, await store.restoreSite(id, await readJson(req), user));
         if (match[2] === '/permanent' && req.method === 'DELETE') return json(res, 200, await store.permanentlyDelete(id, await readJson(req)));
         if (!match[2] && ['PUT', 'DELETE'].includes(req.method)) {
           return json(res, 200, await store.mutate(req.method === 'PUT' ? 'update' : 'delete', id, await readJson(req), user));

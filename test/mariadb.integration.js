@@ -218,6 +218,46 @@ test('MariaDB 실제 DB 전환과 두 앱의 동시 운영', async t => {
     finally { await fresh.close(); }
   });
 
+  await t.test('활성 하위 서버의 그룹 삭제 차단, 삭제 후 계층 복구·동시 복구·백업 검증', async () => {
+    const parent = (await first.store.mutateGroup('create', null, { name: '복구 상위' })).group;
+    const child = (await first.store.mutateGroup('create', null, { name: '복구 하위', parentId: parent.id })).group;
+    const server = (await first.store.mutate('create', null, { ...sample, groupId: child.id, components: [{ type: 'DB', name: '복구 DB', useSystemIp: true }] }, actor)).site;
+    await assert.rejects(second.store.mutateGroup('delete', parent.id, { version: parent.version }), error => error.status === 409);
+    const deleted = (await first.store.mutate('delete', server.id, { version: server.version }, actor)).site;
+    await second.store.mutateGroup('delete', parent.id, { version: parent.version });
+    assert.ok(!(await first.store.listGroups()).some(group => [parent.id, child.id].includes(group.id)));
+    assert.deepEqual(await first.store.find(server.id), deleted);
+    const restore = app => request(app, `/api/sites/${server.id}/restore`, 'POST', { version: deleted.version }, cookie);
+    const history = await first.store.history(server.id);
+    await rename(backupDir, backupDir + '-restore-held'); await writeFile(backupDir, 'blocked');
+    try {
+      assert.equal((await restore(base1)).status, 503);
+      assert.deepEqual(await second.store.find(server.id), deleted);
+    } finally { await rm(backupDir); await rename(backupDir + '-restore-held', backupDir); }
+    await pool.query("CREATE TRIGGER reject_restore_history BEFORE INSERT ON history FOR EACH ROW BEGIN IF NEW.action='restore' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='test restore rollback'; END IF; END");
+    try {
+      assert.equal((await restore(base2)).status, 500);
+      assert.deepEqual(await first.store.find(server.id), deleted);
+      assert.deepEqual(await first.store.history(server.id), history);
+      assert.ok(!(await first.store.listGroups()).some(group => [parent.id, child.id].includes(group.id)));
+    } finally { await pool.query('DROP TRIGGER reject_restore_history'); }
+    const results = await Promise.all([restore(base1), restore(base2)]);
+    assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
+    const result = results.find(result => result.status === 200).body;
+    assert.equal(result.groupRestored, true); assert.equal(result.groupName, '복구 상위 / 복구 하위');
+    assert.equal(result.site.deletedAt, null); assert.equal(result.site.groupId, child.id); assert.deepEqual(result.site.components, server.components);
+    assert.equal((await second.store.listGroups()).find(group => group.id === child.id).parentId, parent.id);
+    const event = (await second.store.history(server.id))[0];
+    assert.equal(event.action, 'restore'); assert.equal(event.before.deleted, true); assert.equal(event.after.deleted, false);
+    const saved = JSON.parse(await readFile(join(backupDir, event.backupFile), 'utf8'));
+    assert.equal(saved.tables.sites.find(site => site.id === server.id).deleted_at, deleted.deletedAt);
+    assert.ok(!saved.tables.groups.some(group => group.id === child.id));
+    assert.ok(saved.tables.metadata.some(row => row.key === 'deleted-groups'));
+    const deletedAgain = (await first.store.mutate('delete', server.id, { version: result.site.version }, actor)).site;
+    const existing = await second.store.restoreSite(server.id, { version: deletedAgain.version }, actor);
+    assert.equal(existing.groupRestored, false); assert.equal(existing.site.groupId, child.id);
+  });
+
   await t.test('로그인 제한을 두 앱이 공유하고 종료 준비 시 트래픽 제외', async () => {
     await Promise.all(Array.from({ length: 30 }, (_, i) => (i % 2 ? first : second).store.consumeLoginAttempt('test-address', Date.now())));
     await assert.rejects(first.store.consumeLoginAttempt('test-address', Date.now()), error => error.status === 429);
@@ -237,6 +277,20 @@ test('MariaDB 실제 DB 전환과 두 앱의 동시 운영', async t => {
       assert.equal((await pool.query('SELECT COUNT(*) AS count FROM ' + quote(table)))[0].count, 0);
     }
     assert.equal((await pool.query("SELECT value FROM metadata WHERE `key` = 'initialized'")).length, 0);
-    await importSnapshot(pool, snapshot);
+    const archivedSnapshot = structuredClone(snapshot);
+    const removedGroup = archivedSnapshot.tables.groups.find(group => group.id === child.id);
+    archivedSnapshot.tables.groups = archivedSnapshot.tables.groups.filter(group => group.id !== child.id);
+    archivedSnapshot.tables.metadata = archivedSnapshot.tables.metadata.filter(row => row.key !== 'deleted-groups');
+    archivedSnapshot.tables.metadata.push({ key: 'deleted-groups', value: JSON.stringify({ [child.id]: { id: child.id, name: removedGroup.name, parentId: removedGroup.parent_id, version: removedGroup.version } }) });
+    archivedSnapshot.tables.sites.find(row => row.id === site.id).deleted_at = new Date().toISOString();
+    const invalidActive = structuredClone(archivedSnapshot);
+    invalidActive.tables.sites.find(row => row.id === site.id).deleted_at = null;
+    await assert.rejects(importSnapshot(pool, invalidActive), /그룹 관계/);
+    await importSnapshot(pool, archivedSnapshot);
+    const restoredApp = await createApp({ dbClient: 'mariadb', database: config, backupDir });
+    try {
+      const restored = await restoredApp.store.restoreSite(site.id, { version: site.version }, actor);
+      assert.equal(restored.groupRestored, true); assert.equal(restored.site.groupId, child.id);
+    } finally { await restoredApp.close(); }
   });
 });

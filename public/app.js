@@ -16,6 +16,7 @@ let currentUser = null;
 let registerMode = false;
 let editing = null;
 let deleting = null;
+let restoring = null;
 let histories = [];
 let historyRequest = 0;
 let listRequest = 0;
@@ -124,7 +125,7 @@ function renderDetails(site) {
   if (!site) { $('system-detail').innerHTML = '<div class="detail-empty"><span aria-hidden="true">☷</span><h2>시스템 상세 정보</h2><p>가운데 목록에서 시스템을 선택해 주세요.</p></div>'; return; }
   const value = key => escapeHtml(site[key]) || '<span class="dash">미등록</span>';
   const components = site.components ?? [];
-  $('system-detail').innerHTML = `<div class="detail-heading"><span class="eyebrow">SYSTEM DETAILS</span><p class="detail-path">${escapeHtml(groupPath(site.groupId))}</p><h2>${escapeHtml(site.systemName)}</h2><div class="detail-status"><span class="badge ${site.externalAccess}">외부접근 ${accessLabels[site.externalAccess]}</span>${site.deletedAt ? '<span class="deleted-label">삭제된 시스템</span>' : ''}</div><p class="row-meta">${site.deletedAt ? '삭제' : '최근 변경'} ${formatDate(site.updatedAt)}<br>${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</p><div class="detail-actions">${site.deletedAt ? `<button class="button danger" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button class="button secondary" data-action="edit" data-id="${site.id}">시스템 수정</button><button class="text-button delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="button secondary" data-action="history" data-id="${site.id}">변경 기록</button></div></div><section class="detail-section" aria-label="시스템 접속 정보"><h3>접속 정보</h3><dl class="detail-grid">${detailField('URL', detailUrl(site.url), true)}${['ip', 'servicePort', 'sshPort'].map(key => detailField(labels[key], `<span class="mono">${value(key)}</span>`)).join('')}${detailField('외부접근가능여부', accessLabels[site.externalAccess])}${detailField('공통계정', secretCell(site, 'commonAccount'))}${detailField('서버계정', secretCell(site, 'serverAccount'))}${detailField('비고', `<span class="detail-notes">${value('notes')}</span>`, true)}</dl></section><section class="detail-section" aria-label="시스템 하위 정보"><div class="detail-section-heading"><h3>하위 정보 <span class="count-badge">${components.length}</span></h3>${site.deletedAt ? '' : `<button class="text-button" data-action="components" data-id="${site.id}">추가·수정</button>`}</div>${components.length ? `<div class="component-detail-actions"><button class="text-button" data-action="expand-components" data-id="${site.id}">모두 펼치기</button><button class="text-button" data-action="collapse-components" data-id="${site.id}" ${isFiltering() ? 'disabled title="검색·필터 적용 중에는 하위 정보를 자동으로 펼칩니다."' : ''}>모두 접기</button></div>` : '<p class="muted">등록된 하위 항목이 없습니다.</p>'}${components.map((component, index) => {
+  $('system-detail').innerHTML = `<div class="detail-heading"><span class="eyebrow">SYSTEM DETAILS</span><p class="detail-path">${escapeHtml(groupPath(site.groupId))}</p><h2>${escapeHtml(site.systemName)}</h2><div class="detail-status"><span class="badge ${site.externalAccess}">외부접근 ${accessLabels[site.externalAccess]}</span>${site.deletedAt ? '<span class="deleted-label">삭제된 시스템</span>' : ''}</div><p class="row-meta">${site.deletedAt ? '삭제' : '최근 변경'} ${formatDate(site.updatedAt)}<br>${escapeHtml(formatActor(site.updatedBy, site.updatedByJobTitle))}</p><div class="detail-actions">${site.deletedAt ? `<button class="button primary" data-action="restore" data-id="${site.id}">복구</button><button class="button danger" data-action="permanent-delete" data-id="${site.id}">완전 삭제</button>` : `<button class="button secondary" data-action="edit" data-id="${site.id}">시스템 수정</button><button class="text-button delete-button" data-action="delete" data-id="${site.id}">삭제</button>`}<button class="button secondary" data-action="history" data-id="${site.id}">변경 기록</button></div></div><section class="detail-section" aria-label="시스템 접속 정보"><h3>접속 정보</h3><dl class="detail-grid">${detailField('URL', detailUrl(site.url), true)}${['ip', 'servicePort', 'sshPort'].map(key => detailField(labels[key], `<span class="mono">${value(key)}</span>`)).join('')}${detailField('외부접근가능여부', accessLabels[site.externalAccess])}${detailField('공통계정', secretCell(site, 'commonAccount'))}${detailField('서버계정', secretCell(site, 'serverAccount'))}${detailField('비고', `<span class="detail-notes">${value('notes')}</span>`, true)}</dl></section><section class="detail-section" aria-label="시스템 하위 정보"><div class="detail-section-heading"><h3>하위 정보 <span class="count-badge">${components.length}</span></h3>${site.deletedAt ? '' : `<button class="text-button" data-action="components" data-id="${site.id}">추가·수정</button>`}</div>${components.length ? `<div class="component-detail-actions"><button class="text-button" data-action="expand-components" data-id="${site.id}">모두 펼치기</button><button class="text-button" data-action="collapse-components" data-id="${site.id}" ${isFiltering() ? 'disabled title="검색·필터 적용 중에는 하위 정보를 자동으로 펼칩니다."' : ''}>모두 접기</button></div>` : '<p class="muted">등록된 하위 항목이 없습니다.</p>'}${components.map((component, index) => {
     const key = `${site.id}:${index}`;
     const inherited = (field, same) => same ? `${value(field)}<span class="inherited-label">시스템과 동일</span>` : escapeHtml(component[field]) || '<span class="dash">미등록</span>';
     const hasUrl = ['WEB', 'PROXY', 'OTHER'].includes(component.type);
@@ -134,7 +135,7 @@ function renderDetails(site) {
 function groupPath(id) {
   const names = [];
   for (let group = groups.find(item => item.id === id); group; group = groups.find(item => item.id === group.parentId)) names.unshift(group.name);
-  return names.join(' / ') || '미분류';
+  return names.join(' / ') || (id ? '삭제된 그룹' : '미분류');
 }
 function compareGroupOrder(a, b) { return (a.treeOrder ?? Infinity) - (b.treeOrder ?? Infinity) || a.name.localeCompare(b.name, 'ko') || a.id - b.id; }
 function orderedGroups(parentId = null, depth = 0) {
@@ -165,8 +166,8 @@ function renderTree(shown) {
 }
 function renderGroupList() {
   $('group-list').innerHTML = orderedGroups().map(group => {
-    const count = sites.filter(site => site.groupId === group.id).length;
-    return `<li><span class="group-list-name"><span class="tree-indent" aria-hidden="true">${'　'.repeat(group.depth)}${group.depth ? '└ ' : ''}</span>${escapeHtml(group.name)}<small>직접 소속 ${count}개${sites.some(site => site.groupId === group.id && site.deletedAt) ? ' (삭제된 목록 포함)' : ''}</small></span><div class="row-actions"><button type="button" data-group-action="edit" data-id="${group.id}" aria-label="${escapeHtml(groupPath(group.id))} 수정">수정</button><button type="button" class="delete-button" data-group-action="delete" data-id="${group.id}" aria-label="${escapeHtml(groupPath(group.id))} 삭제">삭제</button></div></li>`;
+    const count = sites.filter(site => site.groupId === group.id && !site.deletedAt).length;
+    return `<li><span class="group-list-name"><span class="tree-indent" aria-hidden="true">${'　'.repeat(group.depth)}${group.depth ? '└ ' : ''}</span>${escapeHtml(group.name)}<small>활성 서버 ${count}개 · 직접 소속</small></span><div class="row-actions"><button type="button" data-group-action="edit" data-id="${group.id}" aria-label="${escapeHtml(groupPath(group.id))} 수정">수정</button><button type="button" class="delete-button" data-group-action="delete" data-id="${group.id}" aria-label="${escapeHtml(groupPath(group.id))} 삭제">삭제</button></div></li>`;
   }).join('') || '<li class="muted">등록된 그룹이 없습니다. 아래에서 첫 그룹을 추가하세요.</li>';
 }
 function editGroup(group = null) {
@@ -264,7 +265,7 @@ function historyValue(field, value, reveal, snapshot) {
 function renderHistory(reveal = false) {
   $('history-content').innerHTML = histories.map(event => {
     const changes = Object.keys(labels).filter(field => field === 'components' ? JSON.stringify(event.before?.components ?? []) !== JSON.stringify(event.after.components ?? []) : event.before ? (event.before[field] ?? null) !== (event.after[field] ?? null) : event.after[field] != null && event.after[field] !== '' && field !== 'deleted');
-    return `<article class="history-item"><div class="history-head"><span class="action-badge ${event.action}">${({ create: '추가', update: '수정', delete: '삭제', move: '이동' })[event.action]}</span><strong>${escapeHtml(formatActor(event.actor, event.actorJobTitle))}</strong><time datetime="${event.changedAt}">${formatDate(event.changedAt)}</time></div><div class="change-list">${changes.map(field => `<div class="change-row"><span class="change-label">${labels[field]}</span><span class="change-value change-before">${historyValue(field, event.before?.[field], reveal, event.before)}</span><span class="change-arrow" aria-label="변경 후">→</span><span class="change-value change-after">${historyValue(field, event.after[field], reveal, event.after)}</span></div>`).join('')}</div><div class="backup-caption">${event.backupFile ? '변경 전 백업 완료' : '최초 데이터 등록'}</div></article>`;
+    return `<article class="history-item"><div class="history-head"><span class="action-badge ${event.action}">${({ create: '추가', update: '수정', delete: '삭제', move: '이동', restore: '복구' })[event.action]}</span><strong>${escapeHtml(formatActor(event.actor, event.actorJobTitle))}</strong><time datetime="${event.changedAt}">${formatDate(event.changedAt)}</time></div><div class="change-list">${changes.map(field => `<div class="change-row"><span class="change-label">${labels[field]}</span><span class="change-value change-before">${historyValue(field, event.before?.[field], reveal, event.before)}</span><span class="change-arrow" aria-label="변경 후">→</span><span class="change-value change-after">${historyValue(field, event.after[field], reveal, event.after)}</span></div>`).join('')}</div><div class="backup-caption">${event.backupFile ? '변경 전 백업 완료' : '최초 데이터 등록'}</div></article>`;
   }).join('') || '<p class="muted">변경 기록이 없습니다.</p>';
   if (histories.some(event => [event.before, event.after].some(snapshot => snapshot && [snapshot, ...(snapshot.components ?? [])].some(item => item.commonAccount || item.serverAccount)))) {
     const button = document.createElement('button'); button.className = 'button secondary history-secret'; button.textContent = reveal ? '기록의 계정 정보 숨기기' : '기록의 계정 정보 보기'; button.setAttribute('aria-pressed', String(reveal)); button.addEventListener('click', () => renderHistory(!reveal)); $('history-content').append(button);
@@ -434,7 +435,7 @@ $('confirm-group-delete').addEventListener('click', async () => {
   const item = deletingGroup; $('confirm-group-delete').disabled = true; errorAt('group-delete-error');
   try {
     await api(`/api/groups/${item.id}`, { method: 'DELETE', body: { version: item.version } });
-    $('group-delete-dialog').close(); toast('그룹을 삭제했습니다.'); if (await loadSites()) editGroup();
+    $('group-delete-dialog').close(); toast('그룹과 하위 그룹을 삭제했습니다.'); if (await loadSites()) editGroup();
   } catch (error) { errorAt('group-delete-error', error.message); }
   finally { $('confirm-group-delete').disabled = false; }
 });
@@ -490,6 +491,7 @@ $('component-editors').addEventListener('click', event => {
 for (const field of ['url', 'ip', 'sshPort']) $(field).addEventListener('input', () => { for (const card of $('component-editors').children) syncComponentEditor(card); });
 $('site-form').addEventListener('invalid', event => { const card = event.target.closest('.component-editor'); if (card) card.open = true; }, true);
 $('delete-dialog').addEventListener('close', () => { deleting = null; });
+$('restore-dialog').addEventListener('close', () => { restoring = null; });
 $('history-dialog').addEventListener('close', () => { historyRequest++; histories = []; $('history-content').replaceChildren(); });
 $('system-detail').addEventListener('click', event => {
   const button = event.target.closest('button[data-action]'); if (!button) return;
@@ -508,6 +510,13 @@ $('system-detail').addEventListener('click', event => {
     openEditor(site); const card = $('component-editors').children[Number(button.dataset.component)]; card.open = true; card.querySelector('[data-field="name"]').focus();
   }
   if (button.dataset.action === 'history') openHistory(site);
+  if (button.dataset.action === 'restore') {
+    restoring = site; errorAt('restore-error'); $('restore-name').textContent = site.systemName;
+    $('restore-description').textContent = !site.groupId || groups.some(group => group.id === site.groupId)
+      ? `‘${groupPath(site.groupId)}’에 복구합니다. 그룹이 삭제된 경우 필요한 상위 그룹과 함께 복구합니다.`
+      : '삭제된 그룹과 필요한 상위 그룹을 함께 복구한 뒤 시스템을 복구합니다. 같은 위치에 같은 이름의 그룹이 있으면 해당 그룹을 사용합니다.';
+    $('restore-dialog').showModal(); $('confirm-restore').focus();
+  }
   if (['delete', 'permanent-delete'].includes(button.dataset.action)) {
     deleting = site; errorAt('delete-error'); $('delete-name').textContent = site.systemName;
     $('delete-title').textContent = site.deletedAt ? '시스템을 완전 삭제할까요?' : '시스템을 삭제할까요?';
@@ -532,6 +541,18 @@ $('site-form').addEventListener('submit', async event => {
     $('editor').close(); toast(result.changed ? '백업과 변경 기록을 저장했습니다.' : '변경된 내용이 없습니다.'); await loadSites();
   } catch (error) { errorAt('editor-error', error.message); }
   finally { $('save-site').disabled = false; }
+});
+$('confirm-restore').addEventListener('click', async () => {
+  if (!restoring) return; $('confirm-restore').disabled = true; errorAt('restore-error');
+  const item = restoring;
+  try {
+    const result = await api(`/api/sites/${item.id}/restore`, { method: 'POST', body: { version: item.version } });
+    selectedSiteId = result.site.id; directoryScope = { type: 'group', id: result.site.groupId }; $('search').value = ''; $('access-filter').value = 'all';
+    $('restore-dialog').close();
+    toast(result.groupRestored ? `그룹도 함께 복구했습니다. ‘${result.groupName}’에 시스템을 복구했습니다.` : `‘${result.groupName}’에 시스템을 복구했습니다.`);
+    await loadSites();
+  } catch (error) { errorAt('restore-error', error.message); }
+  finally { $('confirm-restore').disabled = false; }
 });
 $('confirm-delete').addEventListener('click', async () => {
   if (!deleting) return; $('confirm-delete').disabled = true; errorAt('delete-error');
